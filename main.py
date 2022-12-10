@@ -1,50 +1,11 @@
-# import os
-# import subprocess
-# import json
-# import time
-
-
-
-# src_path = "D:/NASLocal"
-
-# now_step = 0
-# sub_step = 0
-
-
-# def GetContents(path, file, recursion = 0):
-#     global now_step, sub_step
-    
-#     sub_step += 1
-#     if sub_step > 100:
-#         now_step += 1
-        
-#         print("=" * now_step + " " * (20 - now_step), end= "\r")
-#         if now_step > 19: now_step = 0
-#         sub_step = 0
-
-#     for element in (os.listdir(path)):
-#         work_path = os.path.join(path, element)
-#         if os.path.isdir(work_path):
-#             file.write("  " * recursion + element + '/' + "\n")
-#             GetContents(work_path, file, recursion + 1)
-# #         else:
-# timestamp = datetime.now()
-# formatted_timestamp = timestamp.strftime("%H:%M:%S.") + timestamp.strftime("%f")[:2]
-#             time1.localtime(os.path.getmtime(work_path))){formatted_timestamp}')
-#             file.write("  " * recursion + element + "\t\t" + time1 + "\n")
-            
-
-
-
-# with open("data.txt", "w", encoding="utf-8") as data:
-#     GetContents(src_path, data)
-
-
-
 import os
 import time
 from datetime import datetime
 import hashlib
+
+
+
+src_path = "D:/"
 
 
 
@@ -77,28 +38,6 @@ def format_dir_tree(lines):
             elements.append("/".join(path) + "/")
     return elements
 
-
-
-def get_contents(path, recursion=0):
-    contents = []
-    indent = " " * recursion
-    for element in os.listdir(path):
-        work_path = os.path.join(path, element)
-        if os.path.isdir(work_path):
-            contents.append(indent + "-" + element + " /")
-            try:
-                contents.extend(get_contents(work_path, recursion + 1))
-            except PermissionError:
-                pass
-        else:
-            file_time = os.path.getmtime(work_path)
-            file_creation = os.path.getctime(work_path)
-            file_size = os.path.getsize(work_path)
-            
-            prehash_str = (f'{file_size}&{file_time}&{file_creation}').encode("utf-8")
-            file_hash = str(hashlib.sha256(bytes(prehash_str)).hexdigest())[-16:]
-            contents.append(indent + "-" + element + " " + file_hash)
-    return contents
 
 
 def get_contents2(path, recursion=0):
@@ -143,7 +82,6 @@ def get_contents2(path, recursion=0):
     return contents
 
 
-src_path = "D:/"
 
 timestamp = datetime.now()
 formatted_timestamp = timestamp.strftime("%H:%M:%S.") + timestamp.strftime("%f")[:2]
