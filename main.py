@@ -4,7 +4,6 @@ from datetime import datetime
 import hashlib
 
 
-
 src_path = "D:/"
 
 
@@ -40,7 +39,7 @@ def format_dir_tree(lines):
 
 
 
-def get_contents2(path, recursion=0):
+def get_contents(path, recursion=0):
     contents = []
     indent = " " * recursion
 
@@ -59,7 +58,7 @@ def get_contents2(path, recursion=0):
             if is_dir:
                 contents.append(indent + "-" + element + " /")
                 try:
-                    contents.extend(get_contents2(work_path, recursion + 1))
+                    contents.extend(get_contents(work_path, recursion + 1))
                 except PermissionError:
                     pass
 
@@ -71,11 +70,10 @@ def get_contents2(path, recursion=0):
                 file_stat = os.stat(work_path)
                 file_time = file_stat.st_mtime
                 file_size = file_stat.st_size
-                file_creation = file_stat.st_ctime
 
                 # Use a bytearray instead of a bytes object to create
                 # the prehash_str variable
-                prehash_str = bytearray(f'{file_size}&{file_time}&{file_creation}'.encode("utf-8"))
+                prehash_str = bytearray((str(file_size) + "&" + str(file_time)).encode("utf-8"))
                 file_hash = str(hashlib.sha256(prehash_str).hexdigest())[-16:]
                 contents.append(indent + "-" + element + " " + file_hash)
 
@@ -83,101 +81,163 @@ def get_contents2(path, recursion=0):
 
 
 
-timestamp = datetime.now()
-formatted_timestamp = timestamp.strftime("%H:%M:%S.") + timestamp.strftime("%f")[:2]
-print(f'Getting contents... {formatted_timestamp}')
 
-current_tree = get_contents2(src_path)
+print(f'Getting contents... {datetime.now().strftime("%H:%M:%S")}')
 
-# current_tree = "\n".join(contents)
-# current_tree_list = current_tree.split('\n')
+current_tree = get_contents(src_path)
 
-timestamp = datetime.now()
-formatted_timestamp = timestamp.strftime("%H:%M:%S.") + timestamp.strftime("%f")[:2]
-print(f'Reading file... {formatted_timestamp}')
+
+
+
+print(f'Reading file... {datetime.now().strftime("%H:%M:%S")}')
 
 with open("file_tree.txt", "r", encoding="utf-8") as file_tree:
     previous_tree = file_tree.readlines()
 
 
-# with open("file_tree.txt", "w", encoding="utf-8") as file_tree:
-#     file_tree.write('\n'.join(current_tree))
     
-timestamp = datetime.now()
-formatted_timestamp = timestamp.strftime("%H:%M:%S.") + timestamp.strftime("%f")[:2]
-print(f'Formatting tree... {formatted_timestamp}')
+    
+print(f'Formatting tree... {datetime.now().strftime("%H:%M:%S")}')
 
-newtree = set(format_dir_tree(current_tree))
-prevtree = set(format_dir_tree(previous_tree))
-
-
-timestamp = datetime.now()
-formatted_timestamp = timestamp.strftime("%H:%M:%S.") + timestamp.strftime("%f")[:2]
-print(f'Counting differences... {formatted_timestamp}')
-
-prev_path = []
-curr_path = []
-i = 0
-
-# all_tree = prevtree.union(newtree)
-# t1 = list(all_tree.difference(newtree))
-# t2 = list(all_tree.difference(prevtree))
-
-tree1 = prevtree.difference(newtree)
-tree2 = newtree.difference(prevtree)
-trees = newtree.intersection(prevtree)
+left_side = set(format_dir_tree(current_tree))
+right_side = set(format_dir_tree(previous_tree))
 
 
-t1names = []
-for item in tree1:
-    t1names.append(item[:-17])
-t1names = set(t1names)
-t2names = []
-for item in tree2:
-    t2names.append(item[:-17])
-t2names = set(t2names)
 
-t1hashes = []
-for item in tree1:
-    t1hashes.append(item[-16:])
-t1hashes = set(t1hashes)
-t2hashes = []
-for item in tree2:
-    t2hashes.append(item[-16:])
-t2hashes = set(t2hashes)
+print(f'Counting differences... {datetime.now().strftime("%H:%M:%S")}')
 
 
-timestamp = datetime.now()
-formatted_timestamp = timestamp.strftime("%H:%M:%S.") + timestamp.strftime("%f")[:2]
-print(f'Summing up and saving differences... {formatted_timestamp}')
 
-deleted = t1names.difference(t2names)
-created = t2names.difference(t1names)
-changed = t1names.intersection(t2names)
-moved = t1hashes.intersection(t2hashes)
-copied = created.intersection(trees)
+
+#TODO: make dirs work
+
+only_left_side = left_side.difference(right_side)
+only_right_side = right_side.difference(left_side)
+common_files = left_side.intersection(right_side)
+
+
+only_left_side_names = {}
+only_left_side_hashes = {}
+for element in only_left_side:
+    only_left_side_names[element[:-17]] = element
+    if only_left_side_hashes.get(element[-16:]):
+        only_left_side_hashes[element[-16:]] = only_left_side_hashes[element[-16:]] + [element]
+    else:
+        only_left_side_hashes[element[-16:]] = [element]
+
+
+only_right_side_names = {}
+only_right_side_hashes = {}
+for element in only_right_side:
+    only_right_side_names[element[:-17]] = element
+    if only_right_side_hashes.get(element[-16:]):
+        only_right_side_hashes[element[-16:]] = only_right_side_hashes[element[-16:]] + [element]
+    else:
+        only_right_side_hashes[element[-16:]] = [element]
+
+
+common_files_names = {}
+common_files_hashes = {}
+for element in common_files:
+    common_files_names[element[:-17]] = element
+    if common_files_hashes.get(element[-16:]):
+        common_files_hashes[element[-16:]] = common_files_hashes[element[-16:]] + [element]
+    else:
+        common_files_hashes[element[-16:]] = [element]
+
+
+
+
+
+
+
+print(f'Summing up and saving differences... {datetime.now().strftime("%H:%M:%S")}')
+
+
+created = []
+for element in only_left_side_names:
+    if not element in only_right_side_names:
+        created.append(only_left_side_names[element])
+
+
+deleted = []
+for element in only_right_side_names:
+    if not element in only_left_side_names:
+        deleted.append(only_right_side_names[element])
+
+
+changed = []
+for element in only_right_side_names:
+    if element in only_left_side_names:
+        changed.append(only_left_side_names[element])
+            
+            
+            
+#FIXME: low copy detection performance (> 240s) : LOW deleted/created deletion performance
+moved = []
+for element in only_left_side_hashes:
+    left_elements = only_left_side_hashes.get(element)
+    right_elements = only_right_side_hashes.get(element)
+    common_elements = common_files_hashes.get(element)
+    if not left_elements or not right_elements:
+        continue
+    for i in range(left_elements.__len__()):
+        if left_elements.__len__() > i and right_elements.__len__() > i:
+            moved.append(f'{right_elements[i]} >> {left_elements[i]}')
+            
+            if left_elements[i] in created:
+                created.remove(left_elements[i])
+            if right_elements[i] in deleted:
+                deleted.remove(right_elements[i])
+            
+            
+            
+#             #TODO: Make distinction between moves and copies: moved duplicate files
+copied = []
+for element in only_left_side_hashes:
+    left_elements = only_left_side_hashes.get(element)
+    right_elements = common_files_hashes.get(element)
+    if not right_elements:
+        continue
+    right_elements = right_elements[left_elements.__len__() - 1:]
+    for left_element in left_elements:
+        origin = right_elements[0]
+        copied.append(f'{origin} >> {left_element}')
+        if left_element in created:
+            created.remove(left_element)
+
+
+
+
+print(f'Created elements: {created.__len__()}')
+print(f'Deleted elements: {deleted.__len__()}')
+print(f'Changed elements: {changed.__len__()}')
+print(f'Moved elements: {moved.__len__()}')
+print(f'Copied elements: {copied.__len__()}')
+
 
 with open("changes.txt", "w", encoding="utf-8") as changes_file:
     
     
-    for item in list(deleted):
-        file_str = f'{item}'
-        changes_file.write(f'Deleted {file_str}\n')
+    for item in deleted:
+        changes_file.write(f'Deleted {item}\n')
         
-    for item in list(created):
-        file_str = f'{item}'
-        changes_file.write(f'Created {file_str}\n')
+    for item in created:
+        changes_file.write(f'Created {item}\n')
     
-    for item in list(changed):
-        file_str = f'{item}'
-        changes_file.write(f'Changed {file_str}\n')
+    for item in changed:
+        changes_file.write(f'Changed {item}\n')
     
-    for item in list(moved):
-        file_str = f'{item}'
-        changes_file.write(f'Moved {file_str}\n')
+    for item in moved:
+        changes_file.write(f'Moved {item}\n')
+    
+    for item in copied:
+        changes_file.write(f'Copied {item}\n')
         
         
-timestamp = datetime.now()
-formatted_timestamp = timestamp.strftime("%H:%M:%S.") + timestamp.strftime("%f")[:2]
-print(f'Done! {formatted_timestamp}')
+        
+print(f'Done! {datetime.now().strftime("%H:%M:%S")}')
 
+
+with open("file_tree.txt", "w", encoding="utf-8") as file_tree:
+    file_tree.write('\n'.join(current_tree))
