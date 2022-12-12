@@ -148,10 +148,32 @@ for element in common_files:
 
 
 
-
-
-
 print(f'Summing up and saving differences... {datetime.now().strftime("%H:%M:%S")}')
+
+
+            
+
+local_create_files = []
+local_delete_files = []
+copied = []
+moved = []
+for element in only_left_side_hashes:
+    left_elements = only_left_side_hashes.get(element)
+    right_elements = only_right_side_hashes.get(element)
+    common_elements = common_files_hashes.get(element)
+    
+    for i, item in enumerate(left_elements):
+        if(left_elements.__len__() > i):
+            if right_elements and right_elements.__len__() > i:
+                moved.append(f'{right_elements[i]} >> {item}')
+                local_create_files.append(item)
+                local_delete_files.append(right_elements[i])
+            
+            elif common_elements:
+                copied.append(f'{common_elements[0]} >> {item}')
+                local_create_files.append(item)
+            
+print(f'Analyzed copies. Filling everything else... {datetime.now().strftime("%H:%M:%S")}')
 
 
 created = []
@@ -159,53 +181,21 @@ for element in only_left_side_names:
     if not element in only_right_side_names:
         created.append(only_left_side_names[element])
 
+created = list(set(created).difference(set(local_create_files)))
+
 
 deleted = []
 for element in only_right_side_names:
     if not element in only_left_side_names:
         deleted.append(only_right_side_names[element])
+        
+deleted = list(set(deleted).difference(set(local_delete_files)))
 
 
 changed = []
 for element in only_right_side_names:
     if element in only_left_side_names:
         changed.append(only_left_side_names[element])
-            
-            
-            
-#FIXME: low copy detection performance (> 240s) : LOW deleted/created deletion performance
-moved = []
-for element in only_left_side_hashes:
-    left_elements = only_left_side_hashes.get(element)
-    right_elements = only_right_side_hashes.get(element)
-    common_elements = common_files_hashes.get(element)
-    if not left_elements or not right_elements:
-        continue
-    for i in range(left_elements.__len__()):
-        if left_elements.__len__() > i and right_elements.__len__() > i:
-            moved.append(f'{right_elements[i]} >> {left_elements[i]}')
-            
-            if left_elements[i] in created:
-                created.remove(left_elements[i])
-            if right_elements[i] in deleted:
-                deleted.remove(right_elements[i])
-            
-            
-            
-#             #TODO: Make distinction between moves and copies: moved duplicate files
-copied = []
-for element in only_left_side_hashes:
-    left_elements = only_left_side_hashes.get(element)
-    right_elements = common_files_hashes.get(element)
-    if not right_elements:
-        continue
-    right_elements = right_elements[left_elements.__len__() - 1:]
-    for left_element in left_elements:
-        origin = right_elements[0]
-        copied.append(f'{origin} >> {left_element}')
-        if left_element in created:
-            created.remove(left_element)
-
 
 
 
