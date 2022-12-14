@@ -2,10 +2,15 @@ import os
 import time
 from datetime import datetime
 import hashlib
+import threading
+
 
 
 src_path = "D:/"
-
+nas_path = '\\\\192.168.1.200/nas/'
+forbidden_paths = ['$RECYCLE.BIN', '.PySync']
+allowed_paths = ['*']
+file_tree_name = 'file_tree.txt'
 
 
 def get_contents(path, recursion=0):
@@ -25,11 +30,12 @@ def get_contents(path, recursion=0):
             # If the entry is a directory, append its name to the contents
             # and recursively get its contents
             if is_dir:
-                contents.append(indent + "-" + element + " /")
-                try:
-                    contents.extend(get_contents(work_path, recursion + 1))
-                except PermissionError:
-                    pass
+                if (recursion > 0 or ((not element in forbidden_paths) and ((element + '/') in allowed_paths or '*' in allowed_paths))):
+                    contents.append(indent + "-" + element + " /")
+                    try:
+                        contents.extend(get_contents(work_path, recursion + 1))
+                    except PermissionError:
+                        pass
 
             # If the entry is a file, get its last modification time
             else:
@@ -66,9 +72,6 @@ def format_dir_tree(lines):
         else:
             is_file = True
         
-        if path and path[0] == "$RECYCLE.BIN":
-            continue
-        
         if is_file:
             elements.append("/".join(path) + "/" + element[1:])
         else:
@@ -77,13 +80,10 @@ def format_dir_tree(lines):
 
 
 
-def list_files(src_path : str, tree_lines : list):
-    
-    current_tree = get_contents(src_path)
-    previous_tree = tree_lines
+def list_changes(left_tree : list, right_tree : list):
 
-    left_side = set(format_dir_tree(current_tree))
-    right_side = set(format_dir_tree(previous_tree))
+    left_side = set(format_dir_tree(left_tree))
+    right_side = set(format_dir_tree(right_tree))
 
     only_left_side = left_side.difference(right_side)
     only_right_side = right_side.difference(left_side)
@@ -169,46 +169,67 @@ def list_files(src_path : str, tree_lines : list):
 
     dirs_created = sorted(only_left_side_dirs)
     dirs_deleted = sorted(only_right_side_dirs, reverse=True)
-    return {"DirCreated" : dirs_created, "Changed" : changed, "Created" : created, "Moved" : moved, "Copied" : copied, "Deleted" : deleted, "DirDeleted" : dirs_deleted, "TreeInstance" : current_tree}
-
-lines = []
-with open("file_tree.txt", "r", encoding="utf-8") as file_tree:
-    lines = file_tree.readlines()
-
-x = list_files(src_path, lines)
+    return {"DirCreated" : dirs_created, "Changed" : changed, "Created" : created, "Moved" : moved, "Copied" : copied, "Deleted" : deleted, "DirDeleted" : dirs_deleted}
 
 
-with open("changes.txt", "w", encoding="utf-8") as changes_file:
-    
-    
-    for item in x["DirCreated"]:
-        changes_file.write(f'DirCreated : {item}\n')
-    for item in x["Changed"]:
-        changes_file.write(f'  Changed  : {item}\n')
-    for item in x["Created"]:
-        changes_file.write(f'  Created  : {item}\n')
-    for item in x["Moved"]:
-        changes_file.write(f'   Moved   : {item}\n')
-    for item in x["Copied"]:
-        changes_file.write(f'  Copied   : {item}\n')
-    for item in x["Deleted"]:
-        changes_file.write(f'  Deleted  : {item}\n')
-    for item in x["DirDeleted"]:
-        changes_file.write(f'DirRemoved : {item}\n')
+
+def save_changes(changes_list : dict, path: str):
+    with open(path, "w", encoding="utf-8") as changes_file:    
+        for item in changes_list["DirCreated"]:
+            changes_file.write(f'DirCreated : {item}\n')
+        for item in changes_list["Changed"]:
+            changes_file.write(f'Changed    : {item}\n')
+        for item in changes_list["Created"]:
+            changes_file.write(f'Created    : {item}\n')
+        for item in changes_list["Moved"]:
+            changes_file.write(f'Moved      : {item}\n')
+        for item in changes_list["Copied"]:
+            changes_file.write(f'Copied     : {item}\n')
+        for item in changes_list["Deleted"]:
+            changes_file.write(f'Deleted    : {item}\n')
+        for item in changes_list["DirDeleted"]:
+            changes_file.write(f'DirRemoved : {item}\n')
+
+
+
+def get_nas_tree():
+    global file_tree_name, nas_contents, nas_path
+    with open(f"{nas_path}.PySync/{file_tree_name}", "r", encoding="utf-8") as file_tree:
+        nas_contents = file_tree.readlines()
+
+
+
+def get_local_tree():
+    global file_tree_name
+    with open(file_tree_name, "r", encoding="utf-8") as file_tree:
+        return file_tree.readlines()
+
+
+
+def update_local_tree(local_tree : list):
+    global file_tree_name
+    with open(file_tree_name, "w", encoding="utf-8") as file_tree:
+        file_tree.write('\n'.join(local_tree))
+
+
+
+print(f'start! {datetime.now().strftime("%H:%M:%S")}')
+
+nas_contents = []
+thread = threading.Thread(target=get_nas_tree)
+thread.start()
+
+current_files_tree = get_contents(src_path)
+left_tree = get_local_tree()
+right_tree = nas_contents
+
+thread.join()
+
+changes = list_changes(current_files_tree, right_tree)
+
+save_changes(changes, "changes.txt")
+
         
-        
+update_local_tree(current_files_tree)
         
 print(f'Done! {datetime.now().strftime("%H:%M:%S")}')
-
-
-# print(f'Created files: {created.__len__()}')
-# print(f'Deleted files: {deleted.__len__()}')
-# print(f'Changed files: {changed.__len__()}')
-# print(f'Moved files: {moved.__len__()}')
-# print(f'Copied files: {copied.__len__()}')
-# print(f'Created directories: {dirs_created.__len__()}')
-# print(f'Deleted directories: {dirs_deleted.__len__()}')
-
-
-with open("file_tree.txt", "w", encoding="utf-8") as file_tree:
-    file_tree.write('\n'.join(x["TreeInstance"]))
