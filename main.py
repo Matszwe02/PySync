@@ -1,16 +1,49 @@
 import os
+import shutil
 import time
 from datetime import datetime
 import hashlib
 import threading
+import runpy
+import json
+from tqdm import tqdm
+import atexit
 
 
 
-src_path = "D:/"
-nas_path = '\\\\192.168.1.200/nas/'
-forbidden_paths = ['$RECYCLE.BIN', '.PySync']
-allowed_paths = ['*']
-file_tree_name = 'file_tree.txt'
+with open("config.json", "r") as config_file:
+    config = json.load(config_file)
+
+
+mode = config["Mode"]
+src_path = config["SyncPath"]
+if src_path[-1] != '/':
+    src_path += "/"
+nas_path = config["NasPath"]
+if nas_path[-1] != '/':
+    nas_path += "/"
+forbidden_paths = config["ForbiddenPaths"]
+allowed_paths = config["AllowedPaths"]
+file_tree_name = config["FileTreeName"]
+last_list_threshold = config["LastListThreshold"]
+
+
+
+def nas():
+    global file_tree_name, last_list_threshold
+    if (time.time() - os.path.getmtime(file_tree_name)) > last_list_threshold:
+        src_path = "../"
+        current_files_tree = get_contents(src_path)
+        update_local_tree(current_files_tree)
+
+
+def run_nas_script():
+    open(nas_path + ".PySync/sync.txt", "w").close()
+    
+    time.sleep(2)
+    while os.path.exists(nas_path + ".PySync/sync.txt"):
+        time.sleep(1)
+        
 
 
 def get_contents(path, recursion=0):
@@ -52,7 +85,6 @@ def get_contents(path, recursion=0):
     return contents
 
 
-
 def format_dir_tree(lines):
     indent_level = 0
     path = []
@@ -73,11 +105,13 @@ def format_dir_tree(lines):
             is_file = True
         
         if is_file:
-            elements.append("/".join(path) + "/" + element[1:])
+            if path:
+                elements.append("/".join(path) + "/" + element[1:])
+            else:
+                elements.append(element[1:])
         else:
             elements.append("/".join(path) + "/")
     return elements
-
 
 
 def list_changes(left_tree : list, right_tree : list):
@@ -172,38 +206,39 @@ def list_changes(left_tree : list, right_tree : list):
     return {"DirCreated" : dirs_created, "Changed" : changed, "Created" : created, "Moved" : moved, "Copied" : copied, "Deleted" : deleted, "DirDeleted" : dirs_deleted}
 
 
+def load_changes(path : str):
+    with open(path, "r", encoding="utf-8") as changes_file:
+        changes_list = json.load(changes_file)
+    return changes_list
+
 
 def save_changes(changes_list : dict, path: str):
-    with open(path, "w", encoding="utf-8") as changes_file:    
-        for item in changes_list["DirCreated"]:
-            changes_file.write(f'DirCreated : {item}\n')
-        for item in changes_list["Changed"]:
-            changes_file.write(f'Changed    : {item}\n')
-        for item in changes_list["Created"]:
-            changes_file.write(f'Created    : {item}\n')
-        for item in changes_list["Moved"]:
-            changes_file.write(f'Moved      : {item}\n')
-        for item in changes_list["Copied"]:
-            changes_file.write(f'Copied     : {item}\n')
-        for item in changes_list["Deleted"]:
-            changes_file.write(f'Deleted    : {item}\n')
-        for item in changes_list["DirDeleted"]:
-            changes_file.write(f'DirRemoved : {item}\n')
+    with open(path, "w", encoding="utf-8") as changes_file:
+        json.dump(changes_list, changes_file)
 
+
+def exit_save_changes():
+    global to_upload, to_download
+    save_changes(to_upload, "upload.json")
+    save_changes(to_download, "download.json")
+    print("Saved session changes")
 
 
 def get_nas_tree():
     global file_tree_name, nas_contents, nas_path
     with open(f"{nas_path}.PySync/{file_tree_name}", "r", encoding="utf-8") as file_tree:
         nas_contents = file_tree.readlines()
-
+    for i in range(nas_contents.__len__()):
+        nas_contents[i] = nas_contents[i].removesuffix("\n")
 
 
 def get_local_tree():
     global file_tree_name
     with open(file_tree_name, "r", encoding="utf-8") as file_tree:
-        return file_tree.readlines()
-
+        contents = file_tree.readlines()
+        for i in range(contents.__len__()):
+            contents[i] = contents[i].removesuffix("\n")
+    return contents
 
 
 def update_local_tree(local_tree : list):
@@ -212,24 +247,139 @@ def update_local_tree(local_tree : list):
         file_tree.write('\n'.join(local_tree))
 
 
+def remove_file_hash(name : str):
+    return name[:-17]
 
-print(f'start! {datetime.now().strftime("%H:%M:%S")}')
 
-nas_contents = []
-thread = threading.Thread(target=get_nas_tree)
-thread.start()
+def split_move_copy(command: str):
+    sides = command.split(' >> ')
+    return [remove_file_hash(sides[0]), remove_file_hash(sides[1])]
 
-current_files_tree = get_contents(src_path)
-left_tree = get_local_tree()
-right_tree = nas_contents
 
-thread.join()
+def file_operation(changes : dict, from_path: str, to_path: str):
+    
+    
+    for item in sorted(changes["DirCreated"]):
+        try:
+            os.mkdir(to_path + item)
+            changes["DirCreated"].remove(item)
+            print(f"ok", end=' ')
+        except FileExistsError:
+            print(f"FILE EXISTS", end=' ')
+            changes["DirCreated"].remove(item)
+            pass
+        except FileNotFoundError:
+            os.makedirs(to_path + item) # FIXME: LOL
+            print(f"FILE NOW FOUND CRITICAL", end=' ')
+            changes["DirCreated"].remove(item)
+        print(to_path + " /  " + item)
+                
+    for item in changes["Changed"]:
+        item1 = remove_file_hash(item)
+        shutil.copy2(from_path + item1, to_path + item1)
+        changes["Changed"].remove(item)
+    
+    for item in changes["Created"]:
+        item1 = remove_file_hash(item)
+        shutil.copy2(from_path + item1, to_path + item1)
+        changes["Created"].remove(item)
+    
+    for item in changes["Moved"]:
+        files = split_move_copy(item)
+        shutil.move(to_path + files[0], to_path + files[1]) # FIXME: ALSO LOOOL
+        changes["Moved"].remove(item)
+    
+    for item in changes["Copied"]:
+        files = split_move_copy(item)
+        shutil.copy2(to_path + files[0], to_path + files[1])
+        changes["Copied"].remove(item)
+    
+    for item in changes["Deleted"]:
+        item1 = remove_file_hash(item)
+        try:
+            os.remove(to_path + item1)
+            changes["Deleted"].remove(item)
+        except PermissionError:
+            pass
+    
+    for item in sorted(changes["DirDeleted"], reverse=True):
+        # item = remove_file_hash(item)
+        try:
+            os.rmdir(to_path + item)
+            changes["DirDeleted"].remove(item)
+        except:
+            pass
 
-changes = list_changes(current_files_tree, right_tree)
 
-save_changes(changes, "changes.txt")
 
+if __name__ == "__main__" and mode == "PC":
+
+    print(f'start! {datetime.now().strftime("%H:%M:%S")}')
+    resume = False
+    try:
+        to_download = load_changes("download.json")
+        to_upload = load_changes("upload.json")
+    except:
+        to_download = {}
+        to_upload = {}
+    for key in to_download.keys():
+        if to_download[key].__len__() > 0:
+            resume = True
+    for key in to_upload.keys():
+        if to_upload[key].__len__() > 0:
+            resume = True
+                
+    if not resume:
         
-update_local_tree(current_files_tree)
+        print("Not resuming")
+        run_nas_script()
         
-print(f'Done! {datetime.now().strftime("%H:%M:%S")}')
+        nas_contents = []
+        thread = threading.Thread(target=get_nas_tree)
+        thread.start()
+
+        current_files_tree = get_contents(src_path)
+        left_tree = get_local_tree()
+        thread.join()
+        right_tree = nas_contents
+
+
+        to_download = list_changes(right_tree, left_tree)
+        to_upload = list_changes(current_files_tree, left_tree)
+    
+    else:
+        print("resuming actions...")
+    # print(current_files_tree)
+    # print(left_tree)
+    # print(right_tree)
+
+    save_changes(to_upload, "upload.json")
+    save_changes(to_download, "download.json")
+    
+    atexit.register(exit_save_changes)
+    
+
+    print("Uploading files...")
+    file_operation(to_upload, src_path, nas_path)
+    print("Downloading files...")
+    file_operation(to_download, nas_path, src_path)
+    # except FileNotFoundError:
+    #     print("ERROR during sync")
+    #     atexit.unregister(exit_save_changes)
+    #     save_changes({}, "upload.json")
+    #     save_changes({}, "download.json")
+        
+        
+    # atexit.unregister(exit_save_changes)
+    
+    current_files_tree = get_contents(src_path)     
+    update_local_tree(current_files_tree)
+            
+    print(f'Done! {datetime.now().strftime("%H:%M:%S")}')
+
+if __name__ == "__main__" and mode == "NAS":
+    while True:
+        if os.path.exists("sync.txt"):
+            nas()
+            os.remove("sync.txt")
+        time.sleep(1)

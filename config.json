@@ -1,0 +1,13 @@
+{
+    "Mode" : "PC",
+    "SyncPath" : "D:/test/1",
+    "NasPath" : "O:/testDir",
+    "ForbiddenPaths" : ["$RECYCLE.BIN", ".PySync", "System Volume Information"],
+    "AllowedPaths" : ["*"],
+    "DetectCopy" : true,
+    "DetectMove" : true,
+    "DetectRename" : true,
+    
+    "FileTreeName" : "file_tree.txt",
+    "LastListThreshold" : 60
+}
