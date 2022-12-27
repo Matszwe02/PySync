@@ -6,8 +6,12 @@ import hashlib
 import threading
 import runpy
 import json
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except:
+    pass
 import atexit
+import copy
 
 
 
@@ -25,25 +29,20 @@ if nas_path[-1] != '/':
 forbidden_paths = config["ForbiddenPaths"]
 allowed_paths = config["AllowedPaths"]
 file_tree_name = config["FileTreeName"]
+file_tree_path = config["FileTreePath"]
 last_list_threshold = config["LastListThreshold"]
 
+if not os.path.exists(file_tree_name):
+    open(file_tree_name, 'a').close()
 
 
-def nas():
-    global file_tree_name, last_list_threshold
-    if (time.time() - os.path.getmtime(file_tree_name)) > last_list_threshold:
-        src_path = "../"
-        current_files_tree = get_contents(src_path)
-        update_local_tree(current_files_tree)
-
-
-def run_nas_script():
-    open(nas_path + ".PySync/sync.txt", "w").close()
+def update_nas_tree():
+    open(nas_path + file_tree_path + "sync.txt", "w").close()
     
     time.sleep(2)
-    while os.path.exists(nas_path + ".PySync/sync.txt"):
+    while os.path.exists(nas_path + file_tree_path + "sync.txt"):
         time.sleep(1)
-        
+    get_nas_tree() 
 
 
 def get_contents(path, recursion=0):
@@ -115,7 +114,10 @@ def format_dir_tree(lines):
 
 
 def list_changes(left_tree : list, right_tree : list):
-
+    global config
+    detect_copy = config["DetectCopy"]
+    detect_move = config["DetectMove"]
+    
     left_side = set(format_dir_tree(left_tree))
     right_side = set(format_dir_tree(right_tree))
 
@@ -165,19 +167,20 @@ def list_changes(left_tree : list, right_tree : list):
     local_delete_files = []
     copied = []
     moved = []
+    
     for element in only_left_side_hashes:
         left_elements = only_left_side_hashes.get(element)
         right_elements = only_right_side_hashes.get(element)
         common_elements = common_files_hashes.get(element)
         
         for i, item in enumerate(left_elements):
-            if(left_elements.__len__() > i):
-                if right_elements and right_elements.__len__() > i:
+            if left_elements.__len__() > i:
+                if (right_elements and right_elements.__len__() > i) and detect_move:
                     moved.append(f'{right_elements[i]} >> {item}')
                     local_create_files.append(item)
                     local_delete_files.append(right_elements[i])
                 
-                elif common_elements:
+                elif common_elements and detect_copy:
                     copied.append(f'{common_elements[0]} >> {item}')
                     local_create_files.append(item)
                 
@@ -225,8 +228,8 @@ def exit_save_changes():
 
 
 def get_nas_tree():
-    global file_tree_name, nas_contents, nas_path
-    with open(f"{nas_path}.PySync/{file_tree_name}", "r", encoding="utf-8") as file_tree:
+    global file_tree_name, nas_contents, nas_path, file_tree_path
+    with open(nas_path + file_tree_path + file_tree_name, "r", encoding="utf-8") as file_tree:
         nas_contents = file_tree.readlines()
     for i in range(nas_contents.__len__()):
         nas_contents[i] = nas_contents[i].removesuffix("\n")
@@ -241,9 +244,9 @@ def get_local_tree():
     return contents
 
 
-def update_local_tree(local_tree : list):
+def update_local_tree(local_tree : list, path = ""):
     global file_tree_name
-    with open(file_tree_name, "w", encoding="utf-8") as file_tree:
+    with open(path + file_tree_name, "w", encoding="utf-8") as file_tree:
         file_tree.write('\n'.join(local_tree))
 
 
@@ -258,8 +261,9 @@ def split_move_copy(command: str):
 
 def file_operation(changes : dict, from_path: str, to_path: str):
     
+    changes_save = copy.deepcopy(changes)
     
-    for item in sorted(changes["DirCreated"]):
+    for item in tqdm(sorted(changes_save["DirCreated"]), "DirCreated"):
         try:
             os.mkdir(to_path + item)
             changes["DirCreated"].remove(item)
@@ -269,32 +273,35 @@ def file_operation(changes : dict, from_path: str, to_path: str):
             changes["DirCreated"].remove(item)
             pass
         except FileNotFoundError:
-            os.makedirs(to_path + item) # FIXME: LOL
-            print(f"FILE NOW FOUND CRITICAL", end=' ')
+            print(f"FILE NOT FOUND CRITICAL", end=' ')
             changes["DirCreated"].remove(item)
-        print(to_path + " /  " + item)
+        print(to_path + item)
+    
+    
+    for item in tqdm(changes_save["Created"], "Created"):
+        item1 = remove_file_hash(item)
+        try:
+            shutil.copy2(from_path + item1, to_path + item1)
+            changes["Created"].remove(item)
+        except PermissionError:
+            print(" PERMISSION ERROR WITH FILE " + item1)
                 
-    for item in changes["Changed"]:
+    for item in tqdm(changes_save["Changed"], "Changed"):
         item1 = remove_file_hash(item)
         shutil.copy2(from_path + item1, to_path + item1)
         changes["Changed"].remove(item)
     
-    for item in changes["Created"]:
-        item1 = remove_file_hash(item)
-        shutil.copy2(from_path + item1, to_path + item1)
-        changes["Created"].remove(item)
-    
-    for item in changes["Moved"]:
+    for item in tqdm(changes_save["Moved"], "Moved"):
         files = split_move_copy(item)
-        shutil.move(to_path + files[0], to_path + files[1]) # FIXME: ALSO LOOOL
+        shutil.move(to_path + files[0], to_path + files[1]) # FIXME: 
         changes["Moved"].remove(item)
     
-    for item in changes["Copied"]:
+    for item in tqdm(changes_save["Copied"], "Copied"):
         files = split_move_copy(item)
         shutil.copy2(to_path + files[0], to_path + files[1])
         changes["Copied"].remove(item)
     
-    for item in changes["Deleted"]:
+    for item in tqdm(changes_save["Deleted"], "Deleted"):
         item1 = remove_file_hash(item)
         try:
             os.remove(to_path + item1)
@@ -302,7 +309,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         except PermissionError:
             pass
     
-    for item in sorted(changes["DirDeleted"], reverse=True):
+    for item in tqdm(sorted(changes_save["DirDeleted"], reverse=True), "DirDeleted"):
         # item = remove_file_hash(item)
         try:
             os.rmdir(to_path + item)
@@ -311,31 +318,29 @@ def file_operation(changes : dict, from_path: str, to_path: str):
             pass
 
 
-
 if __name__ == "__main__" and mode == "PC":
 
     print(f'start! {datetime.now().strftime("%H:%M:%S")}')
     resume = False
-    try:
-        to_download = load_changes("download.json")
-        to_upload = load_changes("upload.json")
-    except:
-        to_download = {}
-        to_upload = {}
-    for key in to_download.keys():
-        if to_download[key].__len__() > 0:
-            resume = True
-    for key in to_upload.keys():
-        if to_upload[key].__len__() > 0:
-            resume = True
+    # try:
+    #     to_download = load_changes("download.json")
+    #     to_upload = load_changes("upload.json")
+    # except:
+    #     to_download = {}
+    #     to_upload = {}
+    # for key in to_download.keys():
+    #     if to_download[key].__len__() > 0:
+    #         resume = True
+    # for key in to_upload.keys():
+    #     if to_upload[key].__len__() > 0:
+    #         resume = True
                 
     if not resume:
         
         print("Not resuming")
-        run_nas_script()
         
         nas_contents = []
-        thread = threading.Thread(target=get_nas_tree)
+        thread = threading.Thread(target=update_nas_tree)
         thread.start()
 
         current_files_tree = get_contents(src_path)
@@ -358,11 +363,15 @@ if __name__ == "__main__" and mode == "PC":
     
     atexit.register(exit_save_changes)
     
-
-    print("Uploading files...")
-    file_operation(to_upload, src_path, nas_path)
+    if config["DownloadOnly"] == False:
+        print("Uploading files...")
+        file_operation(to_upload, src_path, nas_path)
+    else:
+        print("skipping uploading files")
+    
     print("Downloading files...")
     file_operation(to_download, nas_path, src_path)
+    
     # except FileNotFoundError:
     #     print("ERROR during sync")
     #     atexit.unregister(exit_save_changes)
@@ -377,9 +386,15 @@ if __name__ == "__main__" and mode == "PC":
             
     print(f'Done! {datetime.now().strftime("%H:%M:%S")}')
 
+
 if __name__ == "__main__" and mode == "NAS":
     while True:
-        if os.path.exists("sync.txt"):
-            nas()
-            os.remove("sync.txt")
+        if os.path.exists(src_path + file_tree_path + "sync.txt"):
+            if (time.time() - os.path.getmtime(file_tree_name)) > last_list_threshold:
+                print("Listing file tree...")
+                current_files_tree = get_contents(src_path)
+                update_local_tree(current_files_tree, src_path + file_tree_path)
+                
+            os.remove(src_path + file_tree_path + "sync.txt")
+            print("Listing done!")
         time.sleep(1)

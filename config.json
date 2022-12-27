@@ -1,13 +1,15 @@
 {
     "Mode" : "PC",
-    "SyncPath" : "D:/test/1",
-    "NasPath" : "O:/testDir",
-    "ForbiddenPaths" : ["$RECYCLE.BIN", ".PySync", "System Volume Information"],
-    "AllowedPaths" : ["*"],
-    "DetectCopy" : true,
-    "DetectMove" : true,
+    "SyncPath" : "D:/_test_local",
+    "NasPath" : "P:/",
+    "ForbiddenPaths" : ["$RECYCLE.BIN", ".PySync", "System Volume Information", ".recycle"],
+    "AllowedPaths" : ["files/"],
+    "DetectCopy" : false,
+    "DetectMove" : false,
     "DetectRename" : true,
+    "DownloadOnly" : true,
     
     "FileTreeName" : "file_tree.txt",
+    "FileTreePath" : ".PySync/",
     "LastListThreshold" : 60
 }
