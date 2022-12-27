@@ -3,7 +3,7 @@
     "SyncPath" : "D:/_test_local",
     "NasPath" : "P:/",
     "ForbiddenPaths" : ["$RECYCLE.BIN", ".PySync", "System Volume Information", ".recycle"],
-    "AllowedPaths" : ["files/"],
+    "AllowedPaths" : ["LapTop/"],
     "DetectCopy" : false,
     "DetectMove" : false,
     "DetectRename" : true,

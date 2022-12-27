@@ -26,23 +26,31 @@ if src_path[-1] != '/':
 nas_path = config["NasPath"]
 if nas_path[-1] != '/':
     nas_path += "/"
+file_tree_path = config["FileTreePath"]
+if file_tree_path[-1] != '/':
+    file_tree_path += "/"
+    
 forbidden_paths = config["ForbiddenPaths"]
 allowed_paths = config["AllowedPaths"]
 file_tree_name = config["FileTreeName"]
-file_tree_path = config["FileTreePath"]
 last_list_threshold = config["LastListThreshold"]
 
 if not os.path.exists(file_tree_name):
     open(file_tree_name, 'a').close()
 
 
+
 def update_nas_tree():
-    open(nas_path + file_tree_path + "sync.txt", "w").close()
+    with open(nas_path + file_tree_path + "sync.txt", "w") as f:
+        f.write(" ")
     
     time.sleep(2)
+    print("waiting for NAS script...")
     while os.path.exists(nas_path + file_tree_path + "sync.txt"):
         time.sleep(1)
+    print("Getting NAS filetree...")
     get_nas_tree() 
+    print("NAS filetree download complete")
 
 
 def get_contents(path, recursion=0):
@@ -67,7 +75,7 @@ def get_contents(path, recursion=0):
                     try:
                         contents.extend(get_contents(work_path, recursion + 1))
                     except PermissionError:
-                        pass
+                        print("PERMISSION ERROR WHILE CREATING " + element)
 
             # If the entry is a file, get its last modification time
             else:
@@ -267,15 +275,15 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         try:
             os.mkdir(to_path + item)
             changes["DirCreated"].remove(item)
-            print(f"ok", end=' ')
         except FileExistsError:
             print(f"FILE EXISTS", end=' ')
+            print(to_path + item)
             changes["DirCreated"].remove(item)
             pass
         except FileNotFoundError:
             print(f"FILE NOT FOUND CRITICAL", end=' ')
+            print(to_path + item)
             changes["DirCreated"].remove(item)
-        print(to_path + item)
     
     
     for item in tqdm(changes_save["Created"], "Created"):
@@ -349,7 +357,8 @@ if __name__ == "__main__" and mode == "PC":
         right_tree = nas_contents
 
 
-        to_download = list_changes(right_tree, left_tree)
+        # to_download = list_changes(right_tree, left_tree)
+        to_download = list_changes(right_tree, current_files_tree)
         to_upload = list_changes(current_files_tree, left_tree)
     
     else:
