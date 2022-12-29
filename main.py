@@ -1,4 +1,5 @@
 import os
+import sys
 import queue
 import shutil
 import time
@@ -22,29 +23,28 @@ with open("config.json", "r") as config_file:
     config = json.load(config_file)
 
 
-mode = config["Mode"]
-src_path = config["SyncPath"]
-if src_path[-1] != '/':
-    src_path += "/"
-nas_path = config["NasPath"]
-if nas_path[-1] != '/':
-    nas_path += "/"
-file_tree_path = config["FileTreePath"]
-if file_tree_path[-1] != '/':
-    file_tree_path += "/"
-    
+
+src_path = config["SyncPath"].rstrip('/') + '/'
+file_tree_path = config["FileTreePath"].rstrip('/') + '/'
+nas_path = config["NasPath"].rstrip('/') + '/'
+nas_local_path = config["NasLocalPath"].rstrip('/') + '/'
 forbidden_paths = config["ForbiddenPaths"]
 allowed_paths = config["AllowedPaths"]
 file_tree_name = config["FileTreeName"]
 last_list_threshold = config["LastListThreshold"]
 large_file_size = config["LargeFileSize"]
 small_file_threads = config["SmallFileThreads"]
-
 task_queue = queue.Queue()
 errors = 0
 
-if not os.path.exists(file_tree_name):
-    open(file_tree_name, 'a').close()
+mode = 'PC'
+if os.path.split(os.getcwd())[-1] + '/' == file_tree_path:
+    mode = 'NAS'
+
+
+
+
+
     
     
 def prRed(skk): print("\033[91m{}\033[00m".format(skk))
@@ -55,6 +55,17 @@ def prPurple(skk): print("\033[95m{}\033[00m".format(skk))
 def prCyan(skk): print("\033[96m{}\033[00m".format(skk))
 def prLightGray(skk): print("\033[97m{}\033[00m".format(skk))
 def prBlack(skk): print("\033[98m{}\033[00m".format(skk))
+
+    
+def red(s): return("\033[91m{}\033[00m".format(s))
+def green(s): return("\033[92m{}\033[00m".format(s))
+def yellow(s): return("\033[93m{}\033[00m".format(s))
+def blue(s): return("\033[94m{}\033[00m".format(s))
+def purple(s): return("\033[95m{}\033[00m".format(s))
+def cyan(s): return("\033[96m{}\033[00m".format(s))
+def lightGray(s): return("\033[97m{}\033[00m".format(s))
+def black(s): return("\033[98m{}\033[00m".format(s))
+
 
 
 def file_action(action_info):
@@ -94,17 +105,21 @@ def worker():
     task_queue.task_done()
 
 
+def update_nas_config():
+    shutil.copy("config.json", nas_path + file_tree_path + "config.json")
+
+
 def update_nas_tree():
+    update_nas_config()
     with open(nas_path + file_tree_path + "sync.txt", "w") as f:
         f.write(" ")
     
-    time.sleep(2)
     print("waiting for NAS script...")
+    time.sleep(2)
     while os.path.exists(nas_path + file_tree_path + "sync.txt"):
         time.sleep(1)
-    print("Getting NAS filetree...")
     get_nas_tree() 
-    print("NAS filetree download complete")
+    prGreen("NAS fileTree download complete")
 
 
 def get_contents(path, local_path = "", recursion=0):
@@ -149,6 +164,22 @@ def get_contents(path, local_path = "", recursion=0):
                 contents.append(indent + "-" + element + " " + file_hash)
 
     return contents
+
+
+def get_trees_async():
+    global nas_contents
+    nas_contents = []
+    thread = threading.Thread(target=update_nas_tree)
+    thread.start()
+
+    current_files_tree = get_contents(src_path)
+    left_tree = get_local_tree()
+    thread.join()
+    right_tree = nas_contents
+
+    to_upload = list_changes(current_files_tree, left_tree)
+    to_download = list_changes(right_tree, left_tree)
+    return to_upload, to_download
 
 
 def format_dir_tree(lines):
@@ -291,7 +322,7 @@ def exit_save_changes():
     global to_upload, to_download
     save_changes(to_upload, "upload.json")
     save_changes(to_download, "download.json")
-    prGreen("Saved session changes")
+    prYellow("Saved session changes")
 
 
 def get_nas_tree():
@@ -444,8 +475,10 @@ def file_operation(changes : dict, from_path: str, to_path: str):
 
 
 if __name__ == "__main__" and mode == "PC":
+    
+    if not os.path.exists(file_tree_name):
+        open(file_tree_name, 'a').close()
 
-    print(f'start! {datetime.now().strftime("%H:%M:%S")}')
     resume = False
     
     for _ in range(small_file_threads):
@@ -467,80 +500,79 @@ if __name__ == "__main__" and mode == "PC":
         if to_upload[key].__len__() > 0:
             resume = True
     
-    tu_len = 0
-    td_len = 0
     
-    if not resume:
-        
-        print("Not resuming")
-        
-        nas_contents = []
-        thread = threading.Thread(target=update_nas_tree)
-        thread.start()
-
-        current_files_tree = get_contents(src_path)
-        left_tree = get_local_tree()
-        thread.join()
-        right_tree = nas_contents
-
-
-        # to_download = list_changes(right_tree, left_tree)
-        to_upload = list_changes(current_files_tree, left_tree)
-            
-        to_download = list_changes(right_tree, left_tree)
+    current_files_tree = None
+    nas_contents = None
+    os.system('cls')
     
+    if resume:
+        prYellow("resuming previous sync")
     else:
-        print("resuming previous sync")
-        
+        to_upload, to_download = get_trees_async()
     
     
-    for key in to_upload:
-        tu_len += to_upload[key].__len__()
-    for key in to_download:
-        td_len += to_download[key].__len__()
+    to_upload_len = sum(len(v) for v in to_upload.values())
+    to_upload_removed_len = sum(len(v) for k, v in to_upload.items() if 'Deleted' in k)
+    to_download_len = sum(len(v) for v in to_download.values())
+    to_download_removed_len = sum(len(v) for k, v in to_download.items() if 'Deleted' in k)
 
 
     save_changes(to_upload, "upload.json")
     save_changes(to_download, "download.json")
     
-    atexit.register(exit_save_changes)
+    print(f'\nRun with {cyan("--sync")} argument to start sync immedialety.\n')
+    print(f'There will be {blue(to_upload_len)} upload changes ({red(to_upload_removed_len)} files to remove) and {blue(to_download_len)} download changes ({red(to_download_removed_len)} files to remove).')
+    print('You can check them in upload.json and download.json.\n')
     
-    prCyan(f'There will be {tu_len} upload changes and {td_len} download changes.\nYou can check them in upload.json and download.json.')
-    print("Press \t 't' for file_tree update \t 'r' to replace file tree with nas \t 'q' to quit \t 'c' to clear sync queue \t anything else to sync\n")
-    action = str(msvcrt.getch())[2]
-    print(action)
+    print(f"Press \t {green('t')} for file_tree update \t {green('r')} to replace file tree with nas \t {green('q')} to quit \t {green('c')} to clear sync queue \t {green('space')} to sync\n")
+    print(f"{blue('r')} causes to update nas from local disk")
+    print(f"{blue('t')} causes to update local disk from nas")
+    print('')
+    if sys.argv.__len__() > 1 and sys.argv[1] == '--sync':
+        action = ' '
+    else:
+        action = str(msvcrt.getch())[2]
+    prBlue(action)
+    time.sleep(0.5)
     
     if action in ['t', 'r', 'c', 'q']:
         if action == 't':
+            if current_files_tree == None:
+                current_files_tree = get_contents(src_path)
             update_local_tree(current_files_tree)
             prPurple("SYNC OVERRIDE \t file_tree update")
         if action == 'r':
+            if nas_contents == None:
+                update_nas_tree()
             update_local_tree(nas_contents)
             prPurple("SYNC OVERRIDE \t replace file tree with nas")
-        if action == 'c':
+        if action in ['c', 'r', 't']:
             save_changes({}, "upload.json")
             save_changes({}, "download.json")
             prPurple("SYNC OVERRIDE \t clear sync queue")
         if action == 'q':
             pass
-        atexit.unregister(exit_save_changes)
         exit()
     
+    if action != ' ':
+        exit()
+    prGreen('Starting sync')
+    time.sleep(1)
+    
+    atexit.register(exit_save_changes)
     os.system("cls")
     no_errors = True
     
-    if config["DownloadOnly"] == False:
-        prBlue("\n   __________  Uploading files  __________")
-        errors = 0
+    
+    prBlue("\n   __________  Uploading files  __________")
+    errors = 0
+    file_operation(to_upload, src_path, nas_path)
+    if errors > 0:
+        prYellow("Some errors occured. Retrying operations...")
         file_operation(to_upload, src_path, nas_path)
-        if errors > 0:
-            prYellow("Some errors occured. Retrying operations...")
-            file_operation(to_upload, src_path, nas_path)
-        if errors > 0:
-            prRed("Upload completed with errors. Check upload.json for more details.")
-            no_errors = False
-    else:
-        print("skipping uploading files")
+    if errors > 0:
+        prRed("Upload completed with errors. Check upload.json for more details.")
+        no_errors = False
         
     
     prBlue("\n   _________  Downloading files  _________")
@@ -554,16 +586,8 @@ if __name__ == "__main__" and mode == "PC":
         prRed("Download completed with errors. Check download.json for more details.")
         no_errors = False
     
-    # except FileNotFoundError:
-    #     print("ERROR during sync")
-    #     atexit.unregister(exit_save_changes)
-    #     save_changes({}, "upload.json")
-    #     save_changes({}, "download.json")
-        
-        
-    # atexit.unregister(exit_save_changes)
     
-    print(f'\nDone!')
+    prGreen(f'\nDone!')
     
     if no_errors:
         update_local_tree(get_contents(src_path))
@@ -572,14 +596,29 @@ if __name__ == "__main__" and mode == "PC":
             
 
 
+
+
 if __name__ == "__main__" and mode == "NAS":
     while True:
-        if os.path.exists(src_path + file_tree_path + "sync.txt"):
+        if os.path.exists(nas_local_path + file_tree_path + "sync.txt"):
+            
+            with open("config.json", "r") as config_file:
+                config = json.load(config_file)
+            src_path = config["SyncPath"].rstrip('/') + '/'
+            file_tree_path = config["FileTreePath"].rstrip('/') + '/'
+            nas_local_path = config["NasLocalPath"].rstrip('/') + '/'
+            forbidden_paths = config["ForbiddenPaths"]
+            allowed_paths = config["AllowedPaths"]
+            file_tree_name = config["FileTreeName"]
+            last_list_threshold = config["LastListThreshold"]
+            
+            
             if (time.time() - os.path.getmtime(file_tree_name)) > last_list_threshold:
                 print("Listing file tree...")
-                current_files_tree = get_contents(src_path)
-                update_local_tree(current_files_tree, src_path + file_tree_path)
+                current_files_tree = get_contents(nas_local_path)
+                update_local_tree(current_files_tree, nas_local_path + file_tree_path)
                 
-            os.remove(src_path + file_tree_path + "sync.txt")
+            os.remove(nas_local_path + file_tree_path + "sync.txt")
             print("Listing done!")
         time.sleep(1)
+        

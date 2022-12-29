@@ -2,16 +2,16 @@
     "Mode" : "PC",
     "SyncPath" : "D:/_test_local",
     "NasPath" : "P:/",
+    "NasLocalPath" : "/srv/dev-disk-by-uuid-01D8F28252779AB0/",
     "ForbiddenPaths" : ["$RECYCLE.BIN", ".PySync", "System Volume Information", ".recycle"],
     "AllowedPaths" : ["LapTop/"],
     "DetectCopy" : false,
     "DetectMove" : false,
     "DetectRename" : true,
-    "DownloadOnly" : false,
-    "LargeFileSize" : 5,
+    "LargeFileSize" : 6,
     "SmallFileThreads" : 32,
     
     "FileTreeName" : "file_tree.txt",
     "FileTreePath" : ".PySync/",
-    "LastListThreshold" : 60
+    "LastListThreshold" : 0
 }
