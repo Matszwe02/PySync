@@ -26,7 +26,8 @@ with open("config.json", "r") as config_file:
 
 src_path = config["SyncPath"].rstrip('/') + '/'
 file_tree_path = config["FileTreePath"].rstrip('/') + '/'
-nas_path = config["NasPath"].rstrip('/') + '/'
+nas_path = False
+nas_detection_timeout = config["NasDetectionTimeout"]
 nas_local_path = config["NasLocalPath"].rstrip('/') + '/'
 forbidden_paths = config["ForbiddenPaths"]
 allowed_paths = config["AllowedPaths"]
@@ -66,6 +67,23 @@ def cyan(s): return("\033[96m{}\033[00m".format(s))
 def lightGray(s): return("\033[97m{}\033[00m".format(s))
 def black(s): return("\033[98m{}\033[00m".format(s))
 
+def wrap(s): return s[:os.get_terminal_size()[0] - 20]
+
+
+
+def check_drive(path, timeout):
+    def worker():
+        try:
+            os.listdir(path)
+        except:
+            time.sleep(timeout * 2)
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        return False
+    return True
 
 
 def file_action(action_info):
@@ -73,20 +91,24 @@ def file_action(action_info):
     item = action_info["item"]
     src_path = action_info["src"]
     dst_path = action_info["dst"]
-    tq = action_info["tqdmInstance"]
+    tq = action_info["tqdm"]
     action = action_info["Action"]
     changes = action_info["Changes"]
+    desc = action_info["desc"]
+    
     try:
         if action == "Copy":
             item1 = remove_file_hash(item)
             shutil.copy2(src_path + item1, dst_path + item1)
-            tq.update()
+            
         
         if action == "Delete":
             item1 = remove_file_hash(item)
             os.remove(dst_path + item1)
-            tq.update()
-            
+        
+        
+        tq.update()
+        desc.set_description_str(wrap("\t" + (item)))
         changes.remove(item)
     except Exception as e:
         prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {src_path + item}')
@@ -110,18 +132,18 @@ def update_nas_config():
 
 
 def update_nas_tree():
+    print("waiting for NAS script...")
     update_nas_config()
     with open(nas_path + file_tree_path + "sync.txt", "w") as f:
         f.write(" ")
     
-    print("waiting for NAS script...")
     time.sleep(2)
     while os.path.exists(nas_path + file_tree_path + "sync.txt"):
         time.sleep(1)
     get_nas_tree() 
     prGreen("NAS fileTree download complete")
 
-
+# TODO: multi-threaded get_contents
 def get_contents(path, local_path = "", recursion=0):
     contents = []
     indent = " " * recursion
@@ -172,13 +194,14 @@ def get_trees_async():
     thread = threading.Thread(target=update_nas_tree)
     thread.start()
 
-    current_files_tree = get_contents(src_path)
-    left_tree = get_local_tree()
+    left_tree = get_contents(src_path)
+    common_tree = get_local_tree()
     thread.join()
     right_tree = nas_contents
 
-    to_upload = list_changes(current_files_tree, left_tree)
-    to_download = list_changes(right_tree, left_tree)
+    to_upload = list_changes(left_tree, common_tree)
+    to_download = list_changes(right_tree, common_tree)
+    # TODO: compare to_upload with right_tree and to_download with left_tree to prevent FILE_EXISTS exceptions
     return to_upload, to_download
 
 
@@ -363,17 +386,20 @@ def file_operation(changes : dict, from_path: str, to_path: str):
     global large_file_size
     changes_1 = copy.deepcopy(changes)
     
-    for item in tqdm(sorted(changes_1["DirCreated"]), "DirCreated", colour = "CYAN"):
-        try:
-            os.mkdir(to_path + item)
-        except FileExistsError:
-            prYellow(f"FILE EXISTS")
-            print(to_path + item)
-        except FileNotFoundError:
-            prRed(f"FILE NOT FOUND CRITICAL")
-            print(to_path + item)
-        changes["DirCreated"].remove(item)
-    
+    with tqdm(total=changes_1["DirCreated"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        for item in tqdm(sorted(changes_1["DirCreated"]), "DirCreated", unit='files', position=0, colour="BLUE"):
+            desc.set_description_str(wrap("\t" + (item)))
+            try:
+                os.mkdir(to_path + item)
+            except FileExistsError:
+                prYellow(f"FILE EXISTS")
+                print(to_path + item)
+            except FileNotFoundError:
+                prRed(f"FILE NOT FOUND CRITICAL")
+                print(to_path + item)
+            changes["DirCreated"].remove(item)
+        desc.set_description_str(" ", refresh=True)
+        
     
     
     small_files = []
@@ -384,21 +410,35 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         else:
             small_files.append(item)
     
-    with tqdm(total = small_files.__len__(), desc="Created SmallFiles", colour = "CYAN") as tq:
-        for item in small_files:
-            task_queue.put({"Action" : "Copy", "src" : from_path, "dst" : to_path, "item" : item, "tqdmInstance" : tq, "Changes" : changes["Created"]})
+    with tqdm(total=small_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        with tqdm(total = small_files.__len__(), desc="Created SmallFiles", unit='files', position=0, colour="BLUE") as tq:
+            for item in small_files:
+                task_queue.put({"Action" : "Copy", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Created"]})
+            
+            while task_queue.qsize() > 0:
+                try:
+                    time.sleep(0.1)
+                except KeyboardInterrupt:
+                    task_queue._init(0)
+                    exit()
+            task_queue.join()
+        desc.set_description_str(" ", refresh=True)
         
-        task_queue.join()
     
-    for item in tqdm(large_files, "Created LargeFiles", colour = "CYAN"):
-        item1 = remove_file_hash(item)
-        try:
-            shutil.copy2(from_path + item1, to_path + item1)
-            changes["Created"].remove(item)
-        except Exception as e:
-            prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
-            time.sleep(0.5)
-            errors += 1
+    
+    with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        for item in tqdm(large_files, "Created LargeFiles", unit='files', position=0, colour="BLUE"):
+            desc.set_description_str(wrap("\t" + (item)))
+            item1 = remove_file_hash(item)
+            try:
+                shutil.copy2(from_path + item1, to_path + item1)
+                changes["Created"].remove(item)
+            except Exception as e:
+                prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
+                time.sleep(0.5)
+                errors += 1
+        desc.set_description_str(" ", refresh=True)
+        
     
     
     small_files = []
@@ -409,72 +449,114 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         else:
             small_files.append(item)
     
-    with tqdm(total = small_files.__len__(), desc="Changed SmallFiles", colour = "CYAN") as tq:
-        for item in small_files:
-            task_queue.put({"Action" : "Copy", "src" : from_path, "dst" : to_path, "item" : item, "tqdmInstance" : tq, "Changes" : changes["Changed"]})
-        
-        task_queue.join()
-                
-    for item in tqdm(large_files, "Changed LargeFiles", colour = "CYAN"):
-        item1 = remove_file_hash(item)
-        try:
-            shutil.copy2(from_path + item1, to_path + item1)
-            changes["Changed"].remove(item)
-        except Exception as e:
-            prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
-            time.sleep(0.5)
-            errors += 1
-    
-    
-    for item in tqdm(changes_1["Moved"], "Moved", colour = "CYAN"):
-        files = split_move_copy(item)
-        try:
-            shutil.move(to_path + files[0], to_path + files[1]) # FIXME: 
-            changes["Moved"].remove(item)
-        except Exception as e:
-            prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
-            time.sleep(0.5)
-            errors += 1
-    
-    for item in tqdm(changes_1["Copied"], "Copied", colour = "CYAN"):
-        files = split_move_copy(item)
-        try:
-            shutil.copy2(to_path + files[0], to_path + files[1])
-            changes["Copied"].remove(item)
-        except Exception as e:
-            prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
-            time.sleep(0.5)
-            errors += 1
+    with tqdm(total=small_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        with tqdm(total = small_files.__len__(), desc="Changed SmallFiles", unit='files', position=0, colour="BLUE") as tq:
+            for item in small_files:
+                task_queue.put({"Action" : "Copy", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Changed"]})
             
+            while task_queue.qsize() > 0:
+                try:
+                    time.sleep(0.1)
+                except KeyboardInterrupt:
+                    task_queue._init(0)
+                    exit()
+            task_queue.join()
+        desc.set_description_str(" ", refresh=True)
+        
+        
+             
+    with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        for item in tqdm(large_files, "Changed LargeFiles", unit='files', position=0, colour="BLUE"):
+            desc.set_description_str(wrap("\t" + (item)))
+            item1 = remove_file_hash(item)
+            try:
+                shutil.copy2(from_path + item1, to_path + item1)
+                changes["Changed"].remove(item)
+            except Exception as e:
+                prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
+                time.sleep(0.5)
+                errors += 1
+        desc.set_description_str(" ", refresh=True)
+        
+        
     
+    with tqdm(total=changes_1["Moved"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        for item in tqdm(changes_1["Moved"], "Moved", unit='files', position=0, colour="BLUE"):
+            desc.set_description_str(wrap("\t" + (item)))
+            files = split_move_copy(item)
+            try:
+                shutil.move(to_path + files[0], to_path + files[1]) # FIXME: move/copy not working
+                changes["Moved"].remove(item)
+            except Exception as e:
+                prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
+                time.sleep(0.5)
+                errors += 1
+        desc.set_description_str(" ", refresh=True)
+        
+        
     
-    with tqdm(total = changes_1["Deleted"].__len__(), desc="Deleted", colour = "CYAN") as tq:
-        for item in changes_1["Deleted"]:
-            task_queue.put({"Action" : "Delete", "src" : from_path, "dst" : to_path, "item" : item, "tqdmInstance" : tq, "Changes" : changes["Deleted"]})
-        task_queue.join()
+    with tqdm(total=changes_1["Copied"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        for item in tqdm(changes_1["Copied"], "Copied", unit='files', position=0, colour="BLUE"):
+            desc.set_description_str(wrap("\t" + (item)))
+            files = split_move_copy(item)
+            try:
+                shutil.copy2(to_path + files[0], to_path + files[1])
+                changes["Copied"].remove(item)
+            except Exception as e:
+                prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
+                time.sleep(0.5)
+                errors += 1
+        desc.set_description_str(" ", refresh=True)
+        
+        
+            
+    with tqdm(total=changes_1["Deleted"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        with tqdm(total = changes_1["Deleted"].__len__(), desc="Deleted", unit='files', position=0, colour="BLUE") as tq:
+            tq.set_postfix_str()
+            for item in changes_1["Deleted"]:
+                task_queue.put({"Action" : "Delete", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Deleted"]})
+            
+            while task_queue.qsize() > 0:
+                try:
+                    time.sleep(0.1)
+                except KeyboardInterrupt:
+                    task_queue._init(0)
+                    exit()
+            task_queue.join()
+        desc.set_description_str(" ", refresh=True)
+        
+        
     
-    # for item in tqdm(changes["Deleted"], "Deleted", colour = "CYAN"):
-    #     item1 = remove_file_hash(item)
-    #     try:
-    #         os.remove(to_path + item1)
-    #     except Exception as e 
-    # prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')PermissionError:
-    #         pass
-    
-    for item in tqdm(sorted(changes_1["DirDeleted"], reverse=True), "DirDeleted", colour = "CYAN"):
-        # item = remove_file_hash(item)
-        try:
-            os.rmdir(to_path + item)
-            changes["DirDeleted"].remove(item)
-        except Exception as e:
-            prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
-            time.sleep(0.5)
-            errors += 1
-
+    with tqdm(total=changes_1["DirDeleted"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
+        for item in tqdm(sorted(changes_1["DirDeleted"], reverse=True), "DirDeleted", unit='files', position=0, colour="BLUE"):
+            desc.set_description_str(wrap("\t" + (item)))
+            try:
+                os.rmdir(to_path + item)
+                changes["DirDeleted"].remove(item)
+            except Exception as e:
+                prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
+                time.sleep(0.5)
+                errors += 1
+        desc.set_description_str(" ", refresh=True)
+        
+        
 
 
 
 if __name__ == "__main__" and mode == "PC":
+    
+    os.system('cls')
+    
+    nas_path = False
+    for path in config["NasPaths"]:
+        print(f"Checking Network Drive on {blue(path)} ...")
+        if check_drive(path, nas_detection_timeout):
+            nas_path =path.rstrip('/') + '/'
+            prGreen("Drive found!")
+            break
+    if nas_path == False:
+        prRed("Network Drive not found in any of selected paths!")
+        exit()
     
     if not os.path.exists(file_tree_name):
         open(file_tree_name, 'a').close()
@@ -503,7 +585,6 @@ if __name__ == "__main__" and mode == "PC":
     
     current_files_tree = None
     nas_contents = None
-    os.system('cls')
     
     if resume:
         prYellow("resuming previous sync")
