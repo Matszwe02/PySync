@@ -1,7 +1,7 @@
 {
     "Mode" : "PC",
     "SyncPath" : "D:/NASlocal",
-    "NasPaths" : ["N:/", "O:/", "P:/", "\\\\192.168.1.200\\nas/", "\\\\10.180.99.4\\nas/", "\\\\192.168.0.234\\nas/"],
+    "NasPaths" : ["N:/", "P:/", "O:/", "\\\\192.168.1.200\\nas/", "\\\\192.168.0.234\\nas/", "\\\\10.180.99.4\\nas/"],
     "NasDetectionTimeout" : 2,
     "NasLocalPath" : "/srv/dev-disk-by-uuid-01D8F28252779AB0/",
     "ForbiddenPaths" : ["$RECYCLE.BIN", ".PySync", "System Volume Information", ".recycle"],

@@ -16,7 +16,8 @@ except:
 import atexit
 import copy
 import concurrent.futures
-
+import base64
+import math
 
 
 with open("config.json", "r") as config_file:
@@ -36,6 +37,8 @@ last_list_threshold = config["LastListThreshold"]
 large_file_size = config["LargeFileSize"]
 small_file_threads = config["SmallFileThreads"]
 task_queue = queue.Queue()
+hash_queue = queue.Queue()
+
 errors = 0
 
 mode = 'PC'
@@ -45,7 +48,7 @@ if os.path.split(os.getcwd())[-1] + '/' == file_tree_path:
 
 
 
-
+# FIXME: Better function naming
     
     
 def prRed(skk): print("\033[91m{}\033[00m".format(skk))
@@ -67,11 +70,11 @@ def cyan(s): return("\033[96m{}\033[00m".format(s))
 def lightGray(s): return("\033[97m{}\033[00m".format(s))
 def black(s): return("\033[98m{}\033[00m".format(s))
 
-def wrap(s): return s[:os.get_terminal_size()[0] - 20]
+def wrap(s): return s[:os.get_terminal_size()[0] - 5]
 
 
 
-def check_drive(path, timeout):
+def check_nas_path(path, timeout):
     def worker():
         try:
             os.listdir(path)
@@ -85,6 +88,16 @@ def check_drive(path, timeout):
         return False
     return True
 
+def check_nas_paths():
+    nas_path = False
+    for path in config["NasPaths"]:
+        print(f"Checking Network Drive on {blue(path)} ...")
+        if check_nas_path(path, nas_detection_timeout):
+            nas_path =path.rstrip('/') + '/'
+            prGreen("Drive found!")
+            break
+    return nas_path
+    
 
 def file_action(action_info):
     global errors
@@ -108,7 +121,7 @@ def file_action(action_info):
         
         
         tq.update()
-        desc.set_description_str(wrap("\t" + (item)))
+        desc.set_description_str(wrap("    " + (item)))
         changes.remove(item)
     except Exception as e:
         prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {src_path + item}')
@@ -116,23 +129,47 @@ def file_action(action_info):
         time.sleep(0.5)
         tq.update()
 
+def file_worker():
+    while True:
+        work = task_queue.get()
+        if work is None:
+            # Sentinel value reached, break the loop
+            break
+        file_action(work)
+        task_queue.task_done()
 
-def worker():
-  while True:
-    work = task_queue.get()
-    if work is None:
-      # Sentinel value reached, break the loop
-      break
-    file_action(work)
-    task_queue.task_done()
+# TODO: Try dumping all files at once, not in loop in get_contents
+def hash_action(path):
+    global hashed_files, hash_work_path
+    if path[-1] == '/':
+            hashed_files.append(path)
+    else:
+        file_stat = os.stat(hash_work_path + path)
+        file_time = file_stat.st_mtime
+        file_size = file_stat.st_size
+        
+        size = str(hex(str(file_size).__len__()))[-1]
+        prehash_str = bytearray((str(file_size) + "&" + str(file_time)).encode("utf-8"))
+        file_hash = ((hashlib.sha256(prehash_str).digest()))
+        encoded_hash = (str(base64.urlsafe_b64encode(file_hash))[2:-2] + size)[-16:]
+        hashed_files.append(path + " " + encoded_hash)
+
+def hash_worker():
+    while True:
+        path = hash_queue.get()
+        if path is None:
+            # Sentinel value reached, break the loop
+            break
+        hash_action(path)
+        hash_queue.task_done()
 
 
 def update_nas_config():
     shutil.copy("config.json", nas_path + file_tree_path + "config.json")
 
 
-def update_nas_tree():
-    print("waiting for NAS script...")
+def run_nas_script():
+    print("Listing NAS files...")
     update_nas_config()
     with open(nas_path + file_tree_path + "sync.txt", "w") as f:
         f.write(" ")
@@ -143,7 +180,7 @@ def update_nas_tree():
     get_nas_tree() 
     prGreen("NAS fileTree download complete")
 
-# TODO: multi-threaded get_contents
+
 def get_contents(path, local_path = "", recursion=0):
     contents = []
     indent = " " * recursion
@@ -179,29 +216,36 @@ def get_contents(path, local_path = "", recursion=0):
                 file_size = file_stat.st_size
                 
                 size = str(hex(str(file_size).__len__()))[-1]
-                
-
                 prehash_str = bytearray((str(file_size) + "&" + str(file_time)).encode("utf-8"))
-                file_hash = (str(hashlib.sha256(prehash_str).hexdigest()) + size)[-16:]
-                contents.append(indent + "-" + element + " " + file_hash)
-
+                file_hash = ((hashlib.sha256(prehash_str).digest()))
+                encoded_hash = (str(base64.urlsafe_b64encode(file_hash))[2:-2] + size)[-16:]
+                contents.append(indent + "-" + element + " " + encoded_hash)
+    
     return contents
 
 
 def get_trees_async():
-    global nas_contents
+    time_start = time.time()
+    global nas_contents, left_tree, right_tree, common_tree
     nas_contents = []
-    thread = threading.Thread(target=update_nas_tree)
+    thread = threading.Thread(target=run_nas_script)
     thread.start()
-
+    print("Listing local files...")
     left_tree = get_contents(src_path)
+    
+    prGreen("Local listing complete")
+    # exit()
     common_tree = get_local_tree()
     thread.join()
     right_tree = nas_contents
+    print(f'Total time: {time.time() - time_start}')
+    return left_tree, right_tree, common_tree
 
+
+# TODO: compare to_upload with right_tree and to_download with left_tree to prevent FILE_EXISTS exceptions
+def get_changes(left_tree, right_tree, common_tree):
     to_upload = list_changes(left_tree, common_tree)
     to_download = list_changes(right_tree, common_tree)
-    # TODO: compare to_upload with right_tree and to_download with left_tree to prevent FILE_EXISTS exceptions
     return to_upload, to_download
 
 
@@ -232,6 +276,17 @@ def format_dir_tree(lines):
         else:
             elements.append("/".join(path) + "/")
     return elements
+
+def unformat_dir_tree(elements):
+    # elements = sorted(elements)
+    lines = []
+    for element in elements:
+        path = element.split('/')
+        if element[-1] == '/':
+            lines.append(' ' * (len(path) - 2) + '-' + path[-2] + ' /')
+        else:
+            lines.append(' ' * (len(path) - 1) + '-' + path[-1])
+    return lines
 
 
 def list_changes(left_tree : list, right_tree : list):
@@ -330,22 +385,32 @@ def list_changes(left_tree : list, right_tree : list):
     return {"DirCreated" : dirs_created, "Changed" : changed, "Created" : created, "Moved" : moved, "Copied" : copied, "Deleted" : deleted, "DirDeleted" : dirs_deleted}
 
 
-def load_changes(path : str):
-    with open(path, "r", encoding="utf-8") as changes_file:
-        changes_list = json.load(changes_file)
-    return changes_list
+def get_len(dictionary: dict, condition = ''): return sum(len(v) for k, v in dictionary.items() if condition in k)
 
 
-def save_changes(changes_list : dict, path: str):
-    with open(path, "w", encoding="utf-8") as changes_file:
-        json.dump(changes_list, changes_file)
+def load_changes():
+    try:
+        with open("upload.json", "r", encoding="utf-8") as changes_file:
+            to_upload = json.load(changes_file)
+        with open("download.json", "r", encoding="utf-8") as changes_file:
+            to_download = json.load(changes_file)
+        return to_upload, to_download
+    except:
+        return {}, {}
+    
+    
+def save_changes(to_upload, to_download):
+    with open("upload.json", "w", encoding="utf-8") as changes_file:
+        json.dump(to_upload, changes_file)
+    with open("download.json", "w", encoding="utf-8") as changes_file:
+        json.dump(to_download, changes_file)
 
 
 def exit_save_changes():
     global to_upload, to_download
-    save_changes(to_upload, "upload.json")
-    save_changes(to_download, "download.json")
-    prYellow("Saved session changes")
+    save_changes(to_upload, to_download)
+    if get_len(to_upload) + get_len(to_download) > 0:
+        prYellow("Saved session changes")
 
 
 def get_nas_tree():
@@ -364,20 +429,15 @@ def get_local_tree():
             contents[i] = contents[i].removesuffix("\n")
     return contents
 
-
+# TODO: update tree with every sync file to prevent issues with modified files during sync
 def update_local_tree(local_tree : list, path = ""):
     global file_tree_name
     with open(path + file_tree_name, "w", encoding="utf-8") as file_tree:
         file_tree.write('\n'.join(local_tree))
 
 
-def remove_file_hash(name : str):
-    return name[:-17]
-
-
-def split_move_copy(command: str):
-    sides = command.split(' >> ')
-    return [remove_file_hash(sides[0]), remove_file_hash(sides[1])]
+def remove_file_hash(name : str): return name[:-17]
+def split_move_copy(command: str): return [remove_file_hash(sides) for sides in command.split(' >> ')]
 
 
 def file_operation(changes : dict, from_path: str, to_path: str):
@@ -388,7 +448,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
     
     with tqdm(total=changes_1["DirCreated"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
         for item in tqdm(sorted(changes_1["DirCreated"]), "DirCreated", unit='files', position=0, colour="BLUE"):
-            desc.set_description_str(wrap("\t" + (item)))
+            desc.set_description_str(wrap("    " + (item)))
             try:
                 os.mkdir(to_path + item)
             except FileExistsError:
@@ -398,7 +458,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                 prRed(f"FILE NOT FOUND CRITICAL")
                 print(to_path + item)
             changes["DirCreated"].remove(item)
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
     
     
@@ -422,13 +482,13 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                     task_queue._init(0)
                     exit()
             task_queue.join()
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
     
     
     with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
         for item in tqdm(large_files, "Created LargeFiles", unit='files', position=0, colour="BLUE"):
-            desc.set_description_str(wrap("\t" + (item)))
+            desc.set_description_str(wrap("    " + (item)))
             item1 = remove_file_hash(item)
             try:
                 shutil.copy2(from_path + item1, to_path + item1)
@@ -437,7 +497,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                 prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
                 time.sleep(0.5)
                 errors += 1
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
     
     
@@ -461,13 +521,13 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                     task_queue._init(0)
                     exit()
             task_queue.join()
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
         
              
     with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
         for item in tqdm(large_files, "Changed LargeFiles", unit='files', position=0, colour="BLUE"):
-            desc.set_description_str(wrap("\t" + (item)))
+            desc.set_description_str(wrap("    " + (item)))
             item1 = remove_file_hash(item)
             try:
                 shutil.copy2(from_path + item1, to_path + item1)
@@ -476,13 +536,13 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                 prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
                 time.sleep(0.5)
                 errors += 1
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
         
     
     with tqdm(total=changes_1["Moved"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
         for item in tqdm(changes_1["Moved"], "Moved", unit='files', position=0, colour="BLUE"):
-            desc.set_description_str(wrap("\t" + (item)))
+            desc.set_description_str(wrap("    " + (item)))
             files = split_move_copy(item)
             try:
                 shutil.move(to_path + files[0], to_path + files[1]) # FIXME: move/copy not working
@@ -491,13 +551,13 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                 prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
                 time.sleep(0.5)
                 errors += 1
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
         
     
     with tqdm(total=changes_1["Copied"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
         for item in tqdm(changes_1["Copied"], "Copied", unit='files', position=0, colour="BLUE"):
-            desc.set_description_str(wrap("\t" + (item)))
+            desc.set_description_str(wrap("    " + (item)))
             files = split_move_copy(item)
             try:
                 shutil.copy2(to_path + files[0], to_path + files[1])
@@ -506,7 +566,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                 prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
                 time.sleep(0.5)
                 errors += 1
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
         
             
@@ -523,13 +583,13 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                     task_queue._init(0)
                     exit()
             task_queue.join()
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
         
     
     with tqdm(total=changes_1["DirDeleted"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
         for item in tqdm(sorted(changes_1["DirDeleted"], reverse=True), "DirDeleted", unit='files', position=0, colour="BLUE"):
-            desc.set_description_str(wrap("\t" + (item)))
+            desc.set_description_str(wrap("    " + (item)))
             try:
                 os.rmdir(to_path + item)
                 changes["DirDeleted"].remove(item)
@@ -537,100 +597,95 @@ def file_operation(changes : dict, from_path: str, to_path: str):
                 prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
                 time.sleep(0.5)
                 errors += 1
-        desc.set_description_str(" ", refresh=True)
+        desc.set_description_str(wrap(" " * 500), refresh=True)
         
-        
 
-
-
-if __name__ == "__main__" and mode == "PC":
+def init_sync():
+    global current_files_tree, nas_contents, to_upload, to_download, nas_contents, nas_path
     
-    os.system('cls')
+    nas_path = check_nas_paths()
     
-    nas_path = False
-    for path in config["NasPaths"]:
-        print(f"Checking Network Drive on {blue(path)} ...")
-        if check_drive(path, nas_detection_timeout):
-            nas_path =path.rstrip('/') + '/'
-            prGreen("Drive found!")
-            break
     if nas_path == False:
         prRed("Network Drive not found in any of selected paths!")
         exit()
     
     if not os.path.exists(file_tree_name):
         open(file_tree_name, 'a').close()
-
-    resume = False
     
-    for _ in range(small_file_threads):
-        t = threading.Thread(target=worker)
-        t.daemon = True
-        t.start()
+    to_upload, to_download = load_changes()
     
+    # current_files_tree = None
+    # nas_contents = None
     
-    try:
-        to_download = load_changes("download.json")
-        to_upload = load_changes("upload.json")
-    except:
-        to_download = {}
-        to_upload = {}
-    for key in to_download.keys():
-        if to_download[key].__len__() > 0:
-            resume = True
-    for key in to_upload.keys():
-        if to_upload[key].__len__() > 0:
-            resume = True
-    
-    
-    current_files_tree = None
-    nas_contents = None
-    
-    if resume:
+    if get_len(to_upload) + get_len(to_download) > 0:
         prYellow("resuming previous sync")
     else:
-        to_upload, to_download = get_trees_async()
+        left_tree, right_tree, common_tree = get_trees_async()
+        to_upload, to_download = get_changes(left_tree, right_tree, common_tree)
     
-    
-    to_upload_len = sum(len(v) for v in to_upload.values())
-    to_upload_removed_len = sum(len(v) for k, v in to_upload.items() if 'Deleted' in k)
-    to_download_len = sum(len(v) for v in to_download.values())
-    to_download_removed_len = sum(len(v) for k, v in to_download.items() if 'Deleted' in k)
+    save_changes(to_upload, to_download)
 
 
-    save_changes(to_upload, "upload.json")
-    save_changes(to_download, "download.json")
+
+for _ in range(small_file_threads):
+    t = threading.Thread(target=file_worker)
+    t.daemon = True
+    t.start()
+
+for _ in range(16):
+    t = threading.Thread(target=hash_worker)
+    t.daemon = True
+    t.start()
+
+
+if __name__ == "__main__" and mode == "PC":
     
-    print(f'\nRun with {cyan("--sync")} argument to start sync immedialety.\n')
-    print(f'There will be {blue(to_upload_len)} upload changes ({red(to_upload_removed_len)} files to remove) and {blue(to_download_len)} download changes ({red(to_download_removed_len)} files to remove).')
-    print('You can check them in upload.json and download.json.\n')
+    os.system('cls')
     
-    print(f"Press \t {green('t')} for file_tree update \t {green('r')} to replace file tree with nas \t {green('q')} to quit \t {green('c')} to clear sync queue \t {green('space')} to sync\n")
-    print(f"{blue('r')} causes to update nas from local disk")
-    print(f"{blue('t')} causes to update local disk from nas")
-    print('')
-    if sys.argv.__len__() > 1 and sys.argv[1] == '--sync':
-        action = ' '
-    else:
-        action = str(msvcrt.getch())[2]
+    init_sync()
+    
+    to_upload_len = get_len(to_upload)
+    to_upload_removed_len = get_len(to_upload, 'Deleted')
+    to_download_len = get_len(to_download)
+    to_download_removed_len = get_len(to_download, 'Deleted')
+
+    
+    print(f"\nRun with {cyan('--sync')} argument to start sync immedialety.\n"
+    f"There will be {blue(to_upload_len)} upload changes ({red(to_upload_removed_len)} files to remove)"
+    f" and {blue(to_download_len)} download changes ({red(to_download_removed_len)} files to remove)."
+    f"You can check them in upload.json and download.json.\n"
+    f"Press \t {green('t')} for file_tree update \t {green('r')} to replace file tree with nas \t {green('q')} to quit"
+    f" \t {green('c')} to clear sync queue \t {green('space')} to sync\n\n"
+    f"{blue('r')} causes to update from local disk to NAS\n"
+    f"{blue('t')} causes to update from NAS to local disk\n")
+    
+    
+    if sys.argv.__len__() > 1 and sys.argv[1] == '--sync': action = ' '
+    else: action = str(msvcrt.getch())[2]
     prBlue(action)
     time.sleep(0.5)
     
-    if action in ['t', 'r', 'c', 'q']:
+    if action in 'crtq':
         if action == 't':
-            if current_files_tree == None:
-                current_files_tree = get_contents(src_path)
-            update_local_tree(current_files_tree)
+            if left_tree == None:
+                left_tree = get_contents(src_path)
+            update_local_tree(left_tree)
             prPurple("SYNC OVERRIDE \t file_tree update")
+            
         if action == 'r':
-            if nas_contents == None:
-                update_nas_tree()
-            update_local_tree(nas_contents)
+            if right_tree == None:
+                run_nas_script()
+            update_local_tree(right_tree)
             prPurple("SYNC OVERRIDE \t replace file tree with nas")
-        if action in ['c', 'r', 't']:
-            save_changes({}, "upload.json")
-            save_changes({}, "download.json")
+            
+        if action in 'crt':
+            save_changes({}, {})
             prPurple("SYNC OVERRIDE \t clear sync queue")
+            
+        if action in 'rt':
+            to_upload, to_download = get_changes(left_tree, right_tree, common_tree)
+            save_changes(to_upload, to_download)
+            
         if action == 'q':
             pass
         exit()
@@ -675,8 +730,6 @@ if __name__ == "__main__" and mode == "PC":
     else:
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
             
-
-
 
 
 if __name__ == "__main__" and mode == "NAS":
