@@ -8,16 +8,16 @@ import hashlib
 import threading
 import runpy
 import json
-try:
-    from tqdm import tqdm
-    import msvcrt
-except:
-    pass
 import atexit
 import copy
 import concurrent.futures
 import base64
 import math
+try:
+    from tqdm import tqdm
+    import msvcrt
+except:
+    pass
 
 
 with open("config.json", "r") as config_file:
@@ -142,7 +142,7 @@ def file_worker():
 def hash_action(path):
     global hashed_files
     
-    file_stat = os.stat(path[1] + path[0])
+    file_stat = os.stat(path[1])
     file_time = file_stat.st_mtime
     file_size = file_stat.st_size
     
@@ -178,73 +178,53 @@ def run_nas_script():
     get_nas_tree() 
     prGreen("NAS fileTree download complete")
 
-# DEPRECATED
-def get_contents(path, local_path = "", recursion=0):
-    contents = []
-    indent = " " * recursion
 
-    # Use os.scandir() to iterate over the contents of the directory
+def get_contents(path, local_path = ""):
+    contents = []
+    
     with os.scandir(path) as entries:
         for entry in entries:
-            # Get the name and type of the entry
+            
             element = entry.name
             is_dir = entry.is_dir()
-
-            # Construct the full path of the entry
+            
             work_path = os.path.join(path, element)
             local_path_1 = os.path.join(local_path, element).replace("\\", "/")
-            # If the entry is a directory, append its name to the contents
-            # and recursively get its contents
-            if is_dir:
-                if (recursion > 0 or ((not element in forbidden_paths) and ((element + '/') in allowed_paths or '*' in allowed_paths))):
+            
+            if is_dir:                
+                if (local_path != "" or ((not element in forbidden_paths) and ((element + '/') in allowed_paths or '*' in allowed_paths))):
                     if local_path_1 + '/' in forbidden_paths:
                         continue
-                    contents.append(indent + "-" + element + " /")
+                    contents.append(local_path_1 + "/")
                     try:
-                        contents.extend(get_contents(work_path, local_path_1, recursion + 1))
+                        contents.extend(get_contents(work_path, local_path_1))
                     except PermissionError:
                         print("PERMISSION ERROR WHILE CREATING " + element)
-
-            # If the entry is a file, get its last modification time
+                        
             else:
-                # Use the stat() method to get the last modification time
-                # and size of the file in a single call
-                file_stat = os.stat(work_path)
-                file_time = file_stat.st_mtime
-                file_size = file_stat.st_size
-                
-                size = str(hex(str(file_size).__len__()))[-1]
-                prehash_str = bytearray((str(file_size) + "&" + str(file_time)).encode("utf-8"))
-                file_hash = ((hashlib.sha256(prehash_str).digest()))
-                encoded_hash = (str(base64.urlsafe_b64encode(file_hash))[2:-2] + size)[-16:]
-                contents.append(indent + "-" + element + " " + encoded_hash)
+                contents.append(local_path_1)
     
     return contents
 
-# TODO: optimization for HDD
 hashed_files = []
-def get_contents_2(path):
+def get_contents_with_hashes(path):
     global hashed_files
     contents = []
     time_start = time.time()
-    for (root, dirs, files) in os.walk(path):
-        common_path = os.path.relpath(root, path).replace('\\', '/').rstrip("/") + "/"
-        
-        if ((not common_path.split('/')[0] in forbidden_paths) and (common_path.split('/')[0] in allowed_paths or '*' in allowed_paths)):
-        
-            for file in files:
-                file = (common_path.replace('\\', '/').rstrip('/') + '/' + file)
-                if file.startswith("./"): file = file[2:]
-                hash_queue.put([file, path])
-            for dir in dirs:
-                content = (common_path.replace('\\', '/').rstrip('/') + '/' +  dir.replace('\\', '/').rstrip('/') + '/')
-                if content.startswith("./"): content = content[2:]
-                if ((not content.split('/')[0] in forbidden_paths) and (content.split('/')[0] in allowed_paths or '*' in allowed_paths)):
-                    contents.append(content)
     
+    contents_1 = get_contents(path)
     
     print(f'took {time.time() - time_start} s to list files')
     time_start = time.time()
+    
+    for item in contents_1:
+        if item[-1] == "/":
+            contents.append(item)
+        else:
+            hash_queue.put([item, path + item])
+    print(f'took {time.time() - time_start} s to update queue')
+    time_start = time.time()
+    
     hash_queue.join()
     print(f'took {time.time() - time_start} s to hash files')
     contents.extend(hashed_files)
@@ -255,18 +235,17 @@ def get_contents_2(path):
 
 def get_trees_async():
     time_start = time.time()
-    global nas_contents, left_tree, right_tree, common_tree
-    nas_contents = []
+    global left_tree, right_tree, common_tree
+    right_tree = []
     thread = threading.Thread(target=run_nas_script)
     thread.start()
     print("Listing local files...")
-    left_tree = get_contents_2(src_path)
+    left_tree = get_contents_with_hashes(src_path)
     
     prGreen("Local listing complete")
     # exit()
     common_tree = get_local_tree()
     thread.join()
-    right_tree = nas_contents
     print(f'Total time: {time.time() - time_start}')
     return left_tree, right_tree, common_tree
 
@@ -443,11 +422,12 @@ def exit_save_changes():
 
 
 def get_nas_tree():
-    global file_tree_name, nas_contents, nas_path, file_tree_path
+    global right_tree
     with open(nas_path + file_tree_path + file_tree_name, "r", encoding="utf-8") as file_tree:
         nas_contents = file_tree.readlines()
     for i in range(nas_contents.__len__()):
         nas_contents[i] = nas_contents[i].removesuffix("\n")
+    right_tree = nas_contents
 
 
 def get_local_tree():
@@ -476,7 +456,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
     changes_1 = copy.deepcopy(changes)
     
     with tqdm(total=changes_1["DirCreated"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(sorted(changes_1["DirCreated"]), "DirCreated", unit='files', position=0, colour="BLUE"):
+        for item in tqdm(sorted(changes_1["DirCreated"]), "DirCreated", unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             try:
                 os.mkdir(to_path + item)
@@ -500,7 +480,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
             small_files.append(item)
     
     with tqdm(total=small_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        with tqdm(total = small_files.__len__(), desc="Created SmallFiles", unit='files', position=0, colour="BLUE") as tq:
+        with tqdm(total = small_files.__len__(), desc="Created SmallFiles", unit='file', position=0, colour="BLUE") as tq:
             for item in small_files:
                 task_queue.put({"Action" : "Copy", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Created"]})
             
@@ -516,7 +496,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
     
     
     with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(large_files, "Created LargeFiles", unit='files', position=0, colour="BLUE"):
+        for item in tqdm(large_files, "Created LargeFiles", unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             item1 = remove_file_hash(item)
             try:
@@ -539,7 +519,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
             small_files.append(item)
     
     with tqdm(total=small_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        with tqdm(total = small_files.__len__(), desc="Changed SmallFiles", unit='files', position=0, colour="BLUE") as tq:
+        with tqdm(total = small_files.__len__(), desc="Changed SmallFiles", unit='file', position=0, colour="BLUE") as tq:
             for item in small_files:
                 task_queue.put({"Action" : "Copy", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Changed"]})
             
@@ -555,7 +535,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
              
     with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(large_files, "Changed LargeFiles", unit='files', position=0, colour="BLUE"):
+        for item in tqdm(large_files, "Changed LargeFiles", unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             item1 = remove_file_hash(item)
             try:
@@ -570,7 +550,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
     
     with tqdm(total=changes_1["Moved"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(changes_1["Moved"], "Moved", unit='files', position=0, colour="BLUE"):
+        for item in tqdm(changes_1["Moved"], "Moved", unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             files = split_move_copy(item)
             try:
@@ -585,7 +565,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
     
     with tqdm(total=changes_1["Copied"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(changes_1["Copied"], "Copied", unit='files', position=0, colour="BLUE"):
+        for item in tqdm(changes_1["Copied"], "Copied", unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             files = split_move_copy(item)
             try:
@@ -600,7 +580,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
             
     with tqdm(total=changes_1["Deleted"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        with tqdm(total = changes_1["Deleted"].__len__(), desc="Deleted", unit='files', position=0, colour="BLUE") as tq:
+        with tqdm(total = changes_1["Deleted"].__len__(), desc="Deleted", unit='file', position=0, colour="BLUE") as tq:
             tq.set_postfix_str()
             for item in changes_1["Deleted"]:
                 task_queue.put({"Action" : "Delete", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Deleted"]})
@@ -617,7 +597,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
     
     with tqdm(total=changes_1["DirDeleted"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(sorted(changes_1["DirDeleted"], reverse=True), "DirDeleted", unit='files', position=0, colour="BLUE"):
+        for item in tqdm(sorted(changes_1["DirDeleted"], reverse=True), "DirDeleted", unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             try:
                 os.rmdir(to_path + item)
@@ -630,7 +610,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
 
 def init_sync():
-    global current_files_tree, nas_contents, to_upload, to_download, nas_contents, nas_path
+    global current_files_tree, to_upload, to_download, nas_path, left_tree, right_tree, common_tree
     
     nas_path = check_nas_paths()
     
@@ -643,11 +623,10 @@ def init_sync():
     
     to_upload, to_download = load_changes()
     
-    # current_files_tree = None
-    # nas_contents = None
-    
     if get_len(to_upload) + get_len(to_download) > 0:
         prYellow("resuming previous sync")
+        right_tree = None
+        left_tree = None
     else:
         left_tree, right_tree, common_tree = get_trees_async()
         to_upload, to_download = get_changes(left_tree, right_tree, common_tree)
@@ -665,6 +644,7 @@ for _ in range(4):
     t = threading.Thread(target=hash_worker)
     t.daemon = True
     t.start()
+
 
 
 if __name__ == "__main__" and mode == "PC":
@@ -711,10 +691,6 @@ if __name__ == "__main__" and mode == "PC":
             save_changes({}, {})
             prPurple("SYNC OVERRIDE \t clear sync queue")
             
-        if action in 'rt':
-            to_upload, to_download = get_changes(left_tree, right_tree, common_tree)
-            save_changes(to_upload, to_download)
-            
         if action == 'q':
             pass
         exit()
@@ -760,7 +736,6 @@ if __name__ == "__main__" and mode == "PC":
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
             
 
-
 if __name__ == "__main__" and mode == "NAS":
     while True:
         if os.path.exists(nas_local_path + file_tree_path + "sync.txt"):
@@ -778,7 +753,7 @@ if __name__ == "__main__" and mode == "NAS":
             
             if (time.time() - os.path.getmtime(file_tree_name)) > last_list_threshold:
                 print("Listing file tree...")
-                current_files_tree = get_contents_2(nas_local_path)
+                current_files_tree = get_contents_with_hashes(nas_local_path)
                 update_local_tree(current_files_tree, nas_local_path + file_tree_path)
                 
             os.remove(nas_local_path + file_tree_path + "sync.txt")
