@@ -138,21 +138,19 @@ def file_worker():
         file_action(work)
         task_queue.task_done()
 
-# TODO: Try dumping all files at once, not in loop in get_contents
+
 def hash_action(path):
-    global hashed_files, hash_work_path
-    if path[-1] == '/':
-            hashed_files.append(path)
-    else:
-        file_stat = os.stat(hash_work_path + path)
-        file_time = file_stat.st_mtime
-        file_size = file_stat.st_size
-        
-        size = str(hex(str(file_size).__len__()))[-1]
-        prehash_str = bytearray((str(file_size) + "&" + str(file_time)).encode("utf-8"))
-        file_hash = ((hashlib.sha256(prehash_str).digest()))
-        encoded_hash = (str(base64.urlsafe_b64encode(file_hash))[2:-2] + size)[-16:]
-        hashed_files.append(path + " " + encoded_hash)
+    global hashed_files
+    
+    file_stat = os.stat(path[1] + path[0])
+    file_time = file_stat.st_mtime
+    file_size = file_stat.st_size
+    
+    size = str(hex(str(file_size).__len__()))[-1]
+    prehash_str = bytearray((str(file_size) + "&" + str(file_time)).encode("utf-8"))
+    file_hash = ((hashlib.sha256(prehash_str).digest()))
+    encoded_hash = (str(base64.urlsafe_b64encode(file_hash))[2:-2] + size)[-16:]
+    hashed_files.append(path[0] + " " + encoded_hash)
 
 def hash_worker():
     while True:
@@ -180,7 +178,7 @@ def run_nas_script():
     get_nas_tree() 
     prGreen("NAS fileTree download complete")
 
-
+# DEPRECATED
 def get_contents(path, local_path = "", recursion=0):
     contents = []
     indent = " " * recursion
@@ -223,6 +221,37 @@ def get_contents(path, local_path = "", recursion=0):
     
     return contents
 
+# TODO: optimization for HDD
+hashed_files = []
+def get_contents_2(path):
+    global hashed_files
+    contents = []
+    time_start = time.time()
+    for (root, dirs, files) in os.walk(path):
+        common_path = os.path.relpath(root, path).replace('\\', '/').rstrip("/") + "/"
+        
+        if ((not common_path.split('/')[0] in forbidden_paths) and (common_path.split('/')[0] in allowed_paths or '*' in allowed_paths)):
+        
+            for file in files:
+                file = (common_path.replace('\\', '/').rstrip('/') + '/' + file)
+                if file.startswith("./"): file = file[2:]
+                hash_queue.put([file, path])
+            for dir in dirs:
+                content = (common_path.replace('\\', '/').rstrip('/') + '/' +  dir.replace('\\', '/').rstrip('/') + '/')
+                if content.startswith("./"): content = content[2:]
+                if ((not content.split('/')[0] in forbidden_paths) and (content.split('/')[0] in allowed_paths or '*' in allowed_paths)):
+                    contents.append(content)
+    
+    
+    print(f'took {time.time() - time_start} s to list files')
+    time_start = time.time()
+    hash_queue.join()
+    print(f'took {time.time() - time_start} s to hash files')
+    contents.extend(hashed_files)
+    contents = sorted(contents)
+    contents = unformat_dir_tree(contents)
+    return contents
+    
 
 def get_trees_async():
     time_start = time.time()
@@ -231,7 +260,7 @@ def get_trees_async():
     thread = threading.Thread(target=run_nas_script)
     thread.start()
     print("Listing local files...")
-    left_tree = get_contents(src_path)
+    left_tree = get_contents_2(src_path)
     
     prGreen("Local listing complete")
     # exit()
@@ -632,7 +661,7 @@ for _ in range(small_file_threads):
     t.daemon = True
     t.start()
 
-for _ in range(16):
+for _ in range(4):
     t = threading.Thread(target=hash_worker)
     t.daemon = True
     t.start()
@@ -749,7 +778,7 @@ if __name__ == "__main__" and mode == "NAS":
             
             if (time.time() - os.path.getmtime(file_tree_name)) > last_list_threshold:
                 print("Listing file tree...")
-                current_files_tree = get_contents(nas_local_path)
+                current_files_tree = get_contents_2(nas_local_path)
                 update_local_tree(current_files_tree, nas_local_path + file_tree_path)
                 
             os.remove(nas_local_path + file_tree_path + "sync.txt")
