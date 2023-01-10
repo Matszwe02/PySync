@@ -464,7 +464,9 @@ def copy_file(from_path, to_path, item1, item, desc):
         if i > 20:
             i = 0
             s1 = os.path.getsize(to_path + item1)
-            desc.set_description_str(wrap(f" {green(str(s1/s2) + '%')}   " + item))
+            percent = int(s1/s2 * 100)
+            if percent > 100: percent = 100
+            desc.set_description_str(wrap(f" {green(str(percent) + '%')}   " + item))
     t.join()
 
 
