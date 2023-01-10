@@ -36,8 +36,11 @@ file_tree_name = config["FileTreeName"]
 last_list_threshold = config["LastListThreshold"]
 large_file_size = config["LargeFileSize"]
 small_file_threads = config["SmallFileThreads"]
+hash_threads = config["HashThreads"]
 task_queue = queue.Queue()
 hash_queue = queue.Queue()
+
+tqdm_main_format = '{desc:<10.50} | {percentage:3.0f}% | {bar} | {n_fmt}/{total_fmt} {rate_fmt}{postfix} | ETA:{remaining}'
 
 errors = 0
 
@@ -206,15 +209,15 @@ def get_contents(path, local_path = ""):
     
     return contents
 
-hashed_files = []
 def get_contents_with_hashes(path):
     global hashed_files
+    hashed_files = []
     contents = []
     time_start = time.time()
     
     contents_1 = get_contents(path)
     
-    print(f'took {time.time() - time_start} s to list files')
+    print(f'took {round(time.time() - time_start, 2)} s to list files')
     time_start = time.time()
     
     for item in contents_1:
@@ -222,15 +225,15 @@ def get_contents_with_hashes(path):
             contents.append(item)
         else:
             hash_queue.put([item, path + item])
-    print(f'took {time.time() - time_start} s to update queue')
+    print(f'took {round(time.time() - time_start, 2)} s to update queue')
     time_start = time.time()
     
     hash_queue.join()
-    print(f'took {time.time() - time_start} s to hash files')
+    print(f'took {round(time.time() - time_start, 2)} s to hash files')
     contents.extend(hashed_files)
-    contents = sorted(contents)
-    contents = unformat_dir_tree(contents)
-    return contents
+    contents_output = unformat_dir_tree(contents)
+    print(f' total of {contents_output.__len__()} files listed')
+    return contents_output
     
 
 def get_trees_async():
@@ -286,9 +289,9 @@ def format_dir_tree(lines):
     return elements
 
 def unformat_dir_tree(elements):
-    # elements = sorted(elements)
+    elements_sort = sorted(elements)
     lines = []
-    for element in elements:
+    for element in elements_sort:
         path = element.split('/')
         if element[-1] == '/':
             lines.append(' ' * (len(path) - 2) + '-' + path[-2] + ' /')
@@ -449,6 +452,22 @@ def remove_file_hash(name : str): return name[:-17]
 def split_move_copy(command: str): return [remove_file_hash(sides) for sides in command.split(' >> ')]
 
 
+def copy_file(from_path, to_path, item1, item, desc):
+    t = threading.Thread(target=shutil.copy2, args=[from_path + item1, to_path + item1])
+    t.start()
+    i = 0
+    s2 = os.path.getsize(from_path + item1)
+    
+    while t.is_alive():
+        i += 1
+        time.sleep(0.1)
+        if i > 20:
+            i = 0
+            s1 = os.path.getsize(to_path + item1)
+            desc.set_description_str(wrap(f" {green(str(s1/s2) + '%')}   " + item))
+    t.join()
+
+
 def file_operation(changes : dict, from_path: str, to_path: str):
     global errors
     
@@ -456,7 +475,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
     changes_1 = copy.deepcopy(changes)
     
     with tqdm(total=changes_1["DirCreated"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(sorted(changes_1["DirCreated"]), "DirCreated", unit='file', position=0, colour="BLUE"):
+        for item in tqdm(sorted(changes_1["DirCreated"]), "DirCreated", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             try:
                 os.mkdir(to_path + item)
@@ -480,7 +499,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
             small_files.append(item)
     
     with tqdm(total=small_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        with tqdm(total = small_files.__len__(), desc="Created SmallFiles", unit='file', position=0, colour="BLUE") as tq:
+        with tqdm(total = small_files.__len__(), desc="Created SmallFiles", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE") as tq:
             for item in small_files:
                 task_queue.put({"Action" : "Copy", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Created"]})
             
@@ -495,12 +514,12 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
     
     
-    with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(large_files, "Created LargeFiles", unit='file', position=0, colour="BLUE"):
+    with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1, unit_scale=True, unit='B') as desc:
+        for item in tqdm(large_files, "Created LargeFiles", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             item1 = remove_file_hash(item)
             try:
-                shutil.copy2(from_path + item1, to_path + item1)
+                copy_file(from_path, to_path, item1, item, desc)
                 changes["Created"].remove(item)
             except Exception as e:
                 prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
@@ -519,7 +538,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
             small_files.append(item)
     
     with tqdm(total=small_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        with tqdm(total = small_files.__len__(), desc="Changed SmallFiles", unit='file', position=0, colour="BLUE") as tq:
+        with tqdm(total = small_files.__len__(), desc="Changed SmallFiles", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE") as tq:
             for item in small_files:
                 task_queue.put({"Action" : "Copy", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Changed"]})
             
@@ -534,12 +553,12 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
         
              
-    with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(large_files, "Changed LargeFiles", unit='file', position=0, colour="BLUE"):
+    with tqdm(total=large_files.__len__() + 10, desc = " ", bar_format='{desc}', position=1, unit_scale=True, unit='B') as desc:
+        for item in tqdm(large_files, "Changed LargeFiles", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             item1 = remove_file_hash(item)
             try:
-                shutil.copy2(from_path + item1, to_path + item1)
+                copy_file(from_path, to_path, item1, item, desc)
                 changes["Changed"].remove(item)
             except Exception as e:
                 prRed(f'\r{" " * 200}\r ERROR {type(e).__name__}  With file : {from_path + item}')
@@ -550,7 +569,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
     
     with tqdm(total=changes_1["Moved"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(changes_1["Moved"], "Moved", unit='file', position=0, colour="BLUE"):
+        for item in tqdm(changes_1["Moved"], "Moved", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             files = split_move_copy(item)
             try:
@@ -565,7 +584,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
     
     with tqdm(total=changes_1["Copied"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(changes_1["Copied"], "Copied", unit='file', position=0, colour="BLUE"):
+        for item in tqdm(changes_1["Copied"], "Copied", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             files = split_move_copy(item)
             try:
@@ -580,7 +599,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
             
     with tqdm(total=changes_1["Deleted"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        with tqdm(total = changes_1["Deleted"].__len__(), desc="Deleted", unit='file', position=0, colour="BLUE") as tq:
+        with tqdm(total = changes_1["Deleted"].__len__(), desc="Deleted", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE") as tq:
             tq.set_postfix_str()
             for item in changes_1["Deleted"]:
                 task_queue.put({"Action" : "Delete", "src" : from_path, "dst" : to_path, "item" : item, "tqdm" : tq, "desc" : desc, "Changes" : changes["Deleted"]})
@@ -597,7 +616,7 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
     
     with tqdm(total=changes_1["DirDeleted"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
-        for item in tqdm(sorted(changes_1["DirDeleted"], reverse=True), "DirDeleted", unit='file', position=0, colour="BLUE"):
+        for item in tqdm(sorted(changes_1["DirDeleted"], reverse=True), "DirDeleted", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
             try:
                 os.rmdir(to_path + item)
@@ -612,11 +631,13 @@ def file_operation(changes : dict, from_path: str, to_path: str):
 def init_sync():
     global current_files_tree, to_upload, to_download, nas_path, left_tree, right_tree, common_tree
     
+    
     nas_path = check_nas_paths()
     
-    if nas_path == False:
+    while nas_path == False:
         prRed("Network Drive not found in any of selected paths!")
-        exit()
+        nas_path = check_nas_paths()
+        # exit()
     
     if not os.path.exists(file_tree_name):
         open(file_tree_name, 'a').close()
@@ -640,7 +661,7 @@ for _ in range(small_file_threads):
     t.daemon = True
     t.start()
 
-for _ in range(4):
+for _ in range(hash_threads):
     t = threading.Thread(target=hash_worker)
     t.daemon = True
     t.start()
@@ -650,53 +671,89 @@ for _ in range(4):
 if __name__ == "__main__" and mode == "PC":
     
     os.system('cls')
-    
     init_sync()
-    
-    to_upload_len = get_len(to_upload)
-    to_upload_removed_len = get_len(to_upload, 'Deleted')
-    to_download_len = get_len(to_download)
-    to_download_removed_len = get_len(to_download, 'Deleted')
+        
+    while True:
+        
+        to_upload_len = get_len(to_upload)
+        to_upload_removed_len = get_len(to_upload, 'Deleted')
+        to_download_len = get_len(to_download)
+        to_download_removed_len = get_len(to_download, 'Deleted')
 
-    
-    print(f"\nRun with {cyan('--sync')} argument to start sync immedialety.\n"
-    f"There will be {blue(to_upload_len)} upload changes ({red(to_upload_removed_len)} files to remove)"
-    f" and {blue(to_download_len)} download changes ({red(to_download_removed_len)} files to remove)."
-    f"You can check them in upload.json and download.json.\n"
-    f"Press \t {green('t')} for file_tree update \t {green('r')} to replace file tree with nas \t {green('q')} to quit"
-    f" \t {green('c')} to clear sync queue \t {green('space')} to sync\n\n"
-    f"{blue('r')} causes to update from local disk to NAS\n"
-    f"{blue('t')} causes to update from NAS to local disk\n")
-    
-    
-    if sys.argv.__len__() > 1 and sys.argv[1] == '--sync': action = ' '
-    else: action = str(msvcrt.getch())[2]
-    prBlue(action)
-    time.sleep(0.5)
-    
-    if action in 'crtq':
-        if action == 't':
-            if left_tree == None:
-                left_tree = get_contents(src_path)
-            update_local_tree(left_tree)
-            prPurple("SYNC OVERRIDE \t file_tree update")
+        
+        print(f"\nRun with {cyan('--sync')} argument to start sync immedialety.\n"
+        f"There will be {blue(to_upload_len)} upload changes ({red(to_upload_removed_len)} files to remove)"
+        f" and {blue(to_download_len)} download changes ({red(to_download_removed_len)} files to remove)."
+        f"You can check them in upload.json and download.json or press \"l\".\n"
+        f"Press \t {green('t')} for file_tree update \t {green('r')} to replace file tree with nas \t {green('q')} to quit"
+        f" \t {green('c')} to clear sync queue \t {green('l')} to list changed files \t {green('x')} to reload sync"
+        f" \t {green('space')} to sync\n\n"
+        f"{blue('r')} causes to update from local disk to NAS\n"
+        f"{blue('t')} causes to update from NAS to local disk\n")
+        
+        
+        if sys.argv.__len__() > 1 and sys.argv[1] == '--sync': action = ' '
+        else: action = str(msvcrt.getch())[2]
+        prBlue(action)
+        time.sleep(0.5)
+        
+        if action in 'crtqlx':
+            if action == 't':
+                if left_tree == None:
+                    left_tree = get_contents_with_hashes(src_path)
+                update_local_tree(left_tree)
+                prPurple("SYNC OVERRIDE \t file_tree update")
+                print(f"use {blue('x')} option to reload sync")
+                
+            if action == 'r':
+                if right_tree == None:
+                    run_nas_script()
+                update_local_tree(right_tree)
+                prPurple("SYNC OVERRIDE \t replace file tree with nas")
+                print(f"use {blue('x')} option to reload sync")
+                
+            if action in 'crt':
+                save_changes({}, {})
+                prPurple("SYNC OVERRIDE \t clear sync queue")
+                print(f"use {blue('x')} option to reload sync")
             
-        if action == 'r':
-            if right_tree == None:
-                run_nas_script()
-            update_local_tree(right_tree)
-            prPurple("SYNC OVERRIDE \t replace file tree with nas")
+            if action == 'l':
+                prBlue("\nTo Upload:")
+                for item in to_upload.keys():
+                    if to_upload[item].__len__() == 0:
+                        continue
+                    prYellow(" " + item + ":")
+                    for element in to_upload[item]:
+                        if "Deleted" in item:
+                            prRed("  - " + element)
+                        else:
+                            prGreen("  - " + element)
+                            
+                prBlue("\nTo Download:")
+                for item in to_download.keys():
+                    if to_download[item].__len__() == 0:
+                        continue
+                    prYellow(" " + item + ":")
+                    for element in to_download[item]:
+                        if "Deleted" in item:
+                            prRed("  - " + element)
+                        else:
+                            prGreen("  - " + element)
+                            
+            if action == 'x':
+                init_sync()
             
-        if action in 'crt':
-            save_changes({}, {})
-            prPurple("SYNC OVERRIDE \t clear sync queue")
+            if action == 'q':
+                exit()
+                
+            input(f"\n\nPress {blue('Enter')} to continue")
+        
+        if action == ' ':
+            break
+        
+        os.system('cls')
+        
             
-        if action == 'q':
-            pass
-        exit()
-    
-    if action != ' ':
-        exit()
     prGreen('Starting sync')
     time.sleep(1)
     
@@ -731,7 +788,7 @@ if __name__ == "__main__" and mode == "PC":
     prGreen(f'\nDone!')
     
     if no_errors:
-        update_local_tree(get_contents(src_path))
+        update_local_tree(get_contents_with_hashes(src_path))
     else:
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
             
