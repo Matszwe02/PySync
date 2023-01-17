@@ -1,3 +1,4 @@
+import_errors = False
 import os
 import sys
 import queue
@@ -13,11 +14,19 @@ import copy
 import concurrent.futures
 import base64
 import math
+import subprocess
+import select
+import shlex
 try:
     from tqdm import tqdm
     import msvcrt
 except:
-    pass
+    import_errors = "PC"
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import LoggingEventHandler
+except:
+    import_errors = "NAS"
 
 
 with open("config.json", "r") as config_file:
@@ -37,8 +46,11 @@ last_list_threshold = config["LastListThreshold"]
 large_file_size = config["LargeFileSize"]
 small_file_threads = config["SmallFileThreads"]
 hash_threads = config["HashThreads"]
+nas_autosave_delay = config["NasAutoSaveDelay"]
 task_queue = queue.Queue()
 hash_queue = queue.Queue()
+
+documents_path = os.path.expanduser("~/Documents/PySync/").replace("\\", "/")
 
 tqdm_main_format = '{desc:<10.50} | {percentage:3.0f}% | {bar} | {n_fmt}/{total_fmt} {rate_fmt}{postfix} | ETA:{remaining}'
 
@@ -48,7 +60,8 @@ mode = 'PC'
 if os.path.split(os.getcwd())[-1] + '/' == file_tree_path:
     mode = 'NAS'
 
-
+if mode == import_errors:
+    raise Exception("Error during packages importing")
 
 
 # FIXME: Better function naming
@@ -154,6 +167,8 @@ def hash_action(path):
     file_hash = ((hashlib.sha256(prehash_str).digest()))
     encoded_hash = (str(base64.urlsafe_b64encode(file_hash))[2:-2] + size)[-16:]
     hashed_files.append(path[0] + " " + encoded_hash)
+    return (path[0] + " " + encoded_hash)
+
 
 def hash_worker():
     while True:
@@ -209,7 +224,7 @@ def get_contents(path, local_path = ""):
     
     return contents
 
-def get_contents_with_hashes(path):
+def get_contents_with_hashes(path, unformatted = True):
     global hashed_files
     hashed_files = []
     contents = []
@@ -231,8 +246,12 @@ def get_contents_with_hashes(path):
     hash_queue.join()
     print(f'took {round(time.time() - time_start, 2)} s to hash files')
     contents.extend(hashed_files)
+    print(f' total of {contents.__len__()} files listed')
+    
+    if not unformatted: 
+        return contents
+        
     contents_output = unformat_dir_tree(contents)
-    print(f' total of {contents_output.__len__()} files listed')
     return contents_output
     
 
@@ -254,9 +273,15 @@ def get_trees_async():
 
 
 # TODO: compare to_upload with right_tree and to_download with left_tree to prevent FILE_EXISTS exceptions
+# UPDATE: TEST
+# UODATE 2: Not working, status = FIXME:
 def get_changes(left_tree, right_tree, common_tree):
     to_upload = list_changes(left_tree, common_tree)
     to_download = list_changes(right_tree, common_tree)
+    # tu_set = set(to_upload)
+    # td_set = set(to_download)
+    # tu_new = list(tu_set.difference(td_set))
+    # td_new = list(td_set.difference(tu_set))
     return to_upload, to_download
 
 
@@ -396,24 +421,29 @@ def list_changes(left_tree : list, right_tree : list):
     return {"DirCreated" : dirs_created, "Changed" : changed, "Created" : created, "Moved" : moved, "Copied" : copied, "Deleted" : deleted, "DirDeleted" : dirs_deleted}
 
 
-def get_len(dictionary: dict, condition = ''): return sum(len(v) for k, v in dictionary.items() if condition in k)
+def get_len(dictionary: dict, condition = ''): 
+    try:
+        return sum(len(v) for k, v in dictionary.items() if condition in k)
+    except:
+        return 0
 
-
+# test
 def load_changes():
     try:
-        with open("upload.json", "r", encoding="utf-8") as changes_file:
+        with open(documents_path + "upload.json", "r", encoding="utf-8") as changes_file:
             to_upload = json.load(changes_file)
-        with open("download.json", "r", encoding="utf-8") as changes_file:
+        with open(documents_path + "download.json", "r", encoding="utf-8") as changes_file:
             to_download = json.load(changes_file)
         return to_upload, to_download
     except:
         return {}, {}
     
-    
+# TODO: save it in absolute path
+# EDIT: TEST
 def save_changes(to_upload, to_download):
-    with open("upload.json", "w", encoding="utf-8") as changes_file:
+    with open(documents_path + "upload.json", "w", encoding="utf-8") as changes_file:
         json.dump(to_upload, changes_file)
-    with open("download.json", "w", encoding="utf-8") as changes_file:
+    with open(documents_path + "download.json", "w", encoding="utf-8") as changes_file:
         json.dump(to_download, changes_file)
 
 
@@ -432,17 +462,18 @@ def get_nas_tree():
         nas_contents[i] = nas_contents[i].removesuffix("\n")
     right_tree = nas_contents
 
-
+# test
 def get_local_tree():
     global file_tree_name
-    with open(file_tree_name, "r", encoding="utf-8") as file_tree:
+    with open(documents_path + file_tree_name, "r", encoding="utf-8") as file_tree:
         contents = file_tree.readlines()
         for i in range(contents.__len__()):
             contents[i] = contents[i].removesuffix("\n")
     return contents
 
+# test
 # TODO: update tree with every sync file to prevent issues with modified files during sync
-def update_local_tree(local_tree : list, path = ""):
+def update_local_tree(local_tree : list, path):
     global file_tree_name
     with open(path + file_tree_name, "w", encoding="utf-8") as file_tree:
         file_tree.write('\n'.join(local_tree))
@@ -641,8 +672,8 @@ def init_sync():
         nas_path = check_nas_paths()
         # exit()
     
-    if not os.path.exists(file_tree_name):
-        open(file_tree_name, 'a').close()
+    if not os.path.exists(documents_path + file_tree_name):
+        open(documents_path + file_tree_name, 'a').close()
     
     to_upload, to_download = load_changes()
     
@@ -657,6 +688,30 @@ def init_sync():
     save_changes(to_upload, to_download)
 
 
+def analise_tree_change(file_tree : list, possible_change):
+    root_dir = possible_change.split('/')[0]
+    if not((not root_dir in forbidden_paths) and ((root_dir + '/') in allowed_paths or '*' in allowed_paths)): return
+    change_path = nas_local_path + possible_change
+    item_exists = os.path.exists(change_path)
+    new_item = possible_change
+    if possible_change[-1] == '/':
+        if possible_change in file_tree:
+            file_tree.remove(possible_change)
+            # print("removed " + possible_change)
+    else:
+        if item_exists: new_item = hash_action([possible_change, change_path])
+        for line in file_tree:
+            if line[:-17] == possible_change:
+                file_tree.remove(line)
+                # print("removed " + line)
+                break
+    
+    if item_exists:
+        file_tree.append(new_item)
+    #     print("added " + new_item)
+    # print("-------------------------------")
+
+
 
 for _ in range(small_file_threads):
     t = threading.Thread(target=file_worker)
@@ -668,9 +723,12 @@ for _ in range(hash_threads):
     t.daemon = True
     t.start()
 
-
-
+# TODO: print in which directories files will be altered, in option 'l'
+# TODO: Better arguments - multiple
 if __name__ == "__main__" and mode == "PC":
+    
+    if not os.path.exists(documents_path): os.mkdir(documents_path)
+    if not os.path.exists(documents_path + file_tree_name): open(documents_path + file_tree_name, "w").close()
     
     os.system('cls')
     init_sync()
@@ -686,7 +744,7 @@ if __name__ == "__main__" and mode == "PC":
         print(f"\nRun with {cyan('--sync')} argument to start sync immedialety.\n"
         f"There will be {blue(to_upload_len)} upload changes ({red(to_upload_removed_len)} files to remove)"
         f" and {blue(to_download_len)} download changes ({red(to_download_removed_len)} files to remove)."
-        f"You can check them in upload.json and download.json or press \"l\".\n"
+        f"You can check them in upload.json and download.json in your Documents folder, or press {green('l')}.\n"
         f"Press \t {green('t')} for file_tree update \t {green('r')} to replace file tree with nas \t {green('q')} to quit"
         f" \t {green('c')} to clear sync queue \t {green('l')} to list changed files \t {green('x')} to reload sync"
         f" \t {green('space')} to sync\n\n"
@@ -703,14 +761,14 @@ if __name__ == "__main__" and mode == "PC":
             if action == 't':
                 if left_tree == None:
                     left_tree = get_contents_with_hashes(src_path)
-                update_local_tree(left_tree)
+                update_local_tree(left_tree, documents_path)
                 prPurple("SYNC OVERRIDE \t file_tree update")
                 print(f"use {blue('x')} option to reload sync")
                 
             if action == 'r':
                 if right_tree == None:
                     run_nas_script()
-                update_local_tree(right_tree)
+                update_local_tree(right_tree, documents_path)
                 prPurple("SYNC OVERRIDE \t replace file tree with nas")
                 print(f"use {blue('x')} option to reload sync")
                 
@@ -721,27 +779,33 @@ if __name__ == "__main__" and mode == "PC":
             
             if action == 'l':
                 prBlue("\nTo Upload:")
-                for item in to_upload.keys():
-                    if to_upload[item].__len__() == 0:
-                        continue
-                    prYellow(" " + item + ":")
-                    for element in to_upload[item]:
-                        if "Deleted" in item:
-                            prRed("  - " + element)
-                        else:
-                            prGreen("  - " + element)
-                            
+                try:
+                    for item in to_upload.keys():
+                        if to_upload[item].__len__() == 0:
+                            continue
+                        prYellow(" " + item + ":")
+                        for element in to_upload[item]:
+                            if "Deleted" in item:
+                                prRed("  - " + element)
+                            else:
+                                prGreen("  - " + element)
+                except AttributeError:
+                    pass
+                
                 prBlue("\nTo Download:")
-                for item in to_download.keys():
-                    if to_download[item].__len__() == 0:
-                        continue
-                    prYellow(" " + item + ":")
-                    for element in to_download[item]:
-                        if "Deleted" in item:
-                            prRed("  - " + element)
-                        else:
-                            prGreen("  - " + element)
-                            
+                try:
+                    for item in to_download.keys():
+                        if to_download[item].__len__() == 0:
+                            continue
+                        prYellow(" " + item + ":")
+                        for element in to_download[item]:
+                            if "Deleted" in item:
+                                prRed("  - " + element)
+                            else:
+                                prGreen("  - " + element)
+                except AttributeError:
+                    pass
+                
             if action == 'x':
                 init_sync()
             
@@ -790,32 +854,60 @@ if __name__ == "__main__" and mode == "PC":
     prGreen(f'\nDone!')
     
     if no_errors:
-        update_local_tree(get_contents_with_hashes(src_path))
+        update_local_tree(get_contents_with_hashes(src_path), documents_path)
     else:
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
             
-
+# TODO: auto-detect changes in realtime instead of listing them every sync
 if __name__ == "__main__" and mode == "NAS":
+    
+    print("Setting up file change detection")
+    total_updates = 0
+    time_from_last_update = 0
+    update_log = []
+    
+    class CustomEventHandler(LoggingEventHandler):        
+        def on_any_event(self, event):
+            update_log.append(event.src_path)
+            
+            
+    event_handler = CustomEventHandler()
+    observer = Observer()
+    observer.schedule(event_handler, nas_local_path, recursive=True)
+    observer.start()
+    
+    
+    print("Listing file tree...")
+    current_formatted_tree = get_contents_with_hashes(nas_local_path, unformatted = False)
+    print("Ready for logging!")
+
     while True:
-        if os.path.exists(nas_local_path + file_tree_path + "sync.txt"):
+        if os.path.exists(nas_local_path + file_tree_path + "sync.txt"):            
             
-            with open("config.json", "r") as config_file:
-                config = json.load(config_file)
-            src_path = config["SyncPath"].rstrip('/') + '/'
-            file_tree_path = config["FileTreePath"].rstrip('/') + '/'
-            nas_local_path = config["NasLocalPath"].rstrip('/') + '/'
-            forbidden_paths = config["ForbiddenPaths"]
-            allowed_paths = config["AllowedPaths"]
-            file_tree_name = config["FileTreeName"]
-            last_list_threshold = config["LastListThreshold"]
+            if total_updates > 0:
+                total_updates = 0
+                update_local_tree(unformat_dir_tree(current_formatted_tree), nas_local_path + file_tree_path)
             
-            
-            if (time.time() - os.path.getmtime(file_tree_name)) > last_list_threshold:
-                print("Listing file tree...")
-                current_files_tree = get_contents_with_hashes(nas_local_path)
-                update_local_tree(current_files_tree, nas_local_path + file_tree_path)
-                
             os.remove(nas_local_path + file_tree_path + "sync.txt")
             print("Listing done!")
-        time.sleep(1)
+        
+        update_log_1 = list(set(update_log))
+        update_log = update_log_1
+        
+        for update in update_log:
+            print(total_updates)
+            change = update[nas_local_path.__len__():]
+            if os.path.isdir(update): change += "/"
+            
+            analise_tree_change(current_formatted_tree, change)
+            update_log.remove(update)
+            total_updates += 1
+            time_from_last_update = 0
+        
+        if total_updates > 0 and time_from_last_update > nas_autosave_delay:
+            total_updates = 0
+            update_local_tree(unformat_dir_tree(current_formatted_tree), nas_local_path + file_tree_path)
+            
+        time_from_last_update += 5
+        time.sleep(5)
         
