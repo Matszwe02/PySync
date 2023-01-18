@@ -688,28 +688,33 @@ def init_sync():
     save_changes(to_upload, to_download)
 
 
-def analise_tree_change(file_tree : list, possible_change):
+def analyse_tree_change(file_tree : list, possible_change):
+    changed = False
     root_dir = possible_change.split('/')[0]
-    if not((not root_dir in forbidden_paths) and ((root_dir + '/') in allowed_paths or '*' in allowed_paths)): return
+    if not((not root_dir in forbidden_paths) and ((root_dir + '/') in allowed_paths or '*' in allowed_paths)): return False
     change_path = nas_local_path + possible_change
     item_exists = os.path.exists(change_path)
     new_item = possible_change
     if possible_change[-1] == '/':
         if possible_change in file_tree:
             file_tree.remove(possible_change)
+            changed = True
             # print("removed " + possible_change)
     else:
         if item_exists: new_item = hash_action([possible_change, change_path])
         for line in file_tree:
             if line[:-17] == possible_change:
                 file_tree.remove(line)
+                changed = True
                 # print("removed " + line)
                 break
     
     if item_exists:
         file_tree.append(new_item)
+        changed = True
     #     print("added " + new_item)
     # print("-------------------------------")
+    return changed
 
 
 
@@ -890,6 +895,17 @@ if __name__ == "__main__" and mode == "NAS":
             
             os.remove(nas_local_path + file_tree_path + "sync.txt")
             print("Listing done!")
+            
+            with open("config.json", "r") as config_file:
+                config = json.load(config_file)
+            src_path = config["SyncPath"].rstrip('/') + '/'
+            file_tree_path = config["FileTreePath"].rstrip('/') + '/'
+            nas_local_path = config["NasLocalPath"].rstrip('/') + '/'
+            forbidden_paths = config["ForbiddenPaths"]
+            allowed_paths = config["AllowedPaths"]
+            file_tree_name = config["FileTreeName"]
+            nas_autosave_delay = config["NasAutoSaveDelay"]
+        
         
         update_log_1 = list(set(update_log))
         update_log = update_log_1
@@ -899,10 +915,11 @@ if __name__ == "__main__" and mode == "NAS":
             change = update[nas_local_path.__len__():]
             if os.path.isdir(update): change += "/"
             
-            analise_tree_change(current_formatted_tree, change)
+            changed = analyse_tree_change(current_formatted_tree, change)
             update_log.remove(update)
-            total_updates += 1
-            time_from_last_update = 0
+            if changed:
+                total_updates += 1
+                time_from_last_update = 0
         
         if total_updates > 0 and time_from_last_update > nas_autosave_delay:
             total_updates = 0

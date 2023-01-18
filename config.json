@@ -12,7 +12,7 @@
     "LargeFileSize" : 8,
     "SmallFileThreads" : 32,
     "HashThreads" : 4,
-    "NasAutoSaveDelay" : 120,
+    "NasAutoSaveDelay" : 60,
     
     "FileTreeName" : "file_tree.txt",
     "FileTreePath" : ".PySync/",
