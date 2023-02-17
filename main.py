@@ -55,6 +55,7 @@ documents_path = os.path.expanduser("~/Documents/PySync/").replace("\\", "/")
 tqdm_main_format = '{desc:<10.50} | {percentage:3.0f}% | {bar} | {n_fmt}/{total_fmt} {rate_fmt}{postfix} | ETA:{remaining}'
 
 errors = 0
+last_print_time = 0
 
 mode = 'PC'
 if os.path.split(os.getcwd())[-1] + '/' == file_tree_path:
@@ -278,11 +279,23 @@ def get_trees_async():
 def get_changes(left_tree, right_tree, common_tree):
     to_upload = list_changes(left_tree, common_tree)
     to_download = list_changes(right_tree, common_tree)
-    # tu_set = set(to_upload)
-    # td_set = set(to_download)
-    # tu_new = list(tu_set.difference(td_set))
-    # td_new = list(td_set.difference(tu_set))
-    return to_upload, to_download
+    tu_new = {}
+    td_new = {}
+    for key in list(set(to_upload.keys()).union(set(to_download.keys()))):
+        try:
+            tu_val = to_upload[key]
+            td_val = to_download[key]
+            diff1 = list(set(tu_val).difference(set(td_val)))
+            diff2 = list(set(td_val).difference(set(tu_val)))
+            tu_new[key] = diff1
+            td_new[key] = diff2
+        except:
+            if key in to_upload.keys():
+                tu_new = to_upload[key]
+            if key in to_download.keys():
+                td_new = to_download[key]
+        
+    return tu_new, td_new
 
 
 def format_dir_tree(lines):
@@ -438,8 +451,7 @@ def load_changes():
     except:
         return {}, {}
     
-# TODO: save it in absolute path
-# EDIT: TEST
+    
 def save_changes(to_upload, to_download):
     with open(documents_path + "upload.json", "w", encoding="utf-8") as changes_file:
         json.dump(to_upload, changes_file)
@@ -863,7 +875,7 @@ if __name__ == "__main__" and mode == "PC":
     else:
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
             
-# TODO: auto-detect changes in realtime instead of listing them every sync
+            
 if __name__ == "__main__" and mode == "NAS":
     
     print("Setting up file change detection")
@@ -887,11 +899,16 @@ if __name__ == "__main__" and mode == "NAS":
     print("Ready for logging!")
 
     while True:
+        if os.path.exists(nas_local_path + file_tree_path + "restart.txt"):
+            print("Listing file tree...")
+            current_formatted_tree = get_contents_with_hashes(nas_local_path, unformatted = False)
+            os.remove(nas_local_path + file_tree_path + "restart.txt")
+            print("Ready for logging!")
+            
         if os.path.exists(nas_local_path + file_tree_path + "sync.txt"):            
             
-            if total_updates > 0:
-                total_updates = 0
-                update_local_tree(unformat_dir_tree(current_formatted_tree), nas_local_path + file_tree_path)
+            total_updates = 0
+            update_local_tree(unformat_dir_tree(current_formatted_tree), nas_local_path + file_tree_path)
             
             os.remove(nas_local_path + file_tree_path + "sync.txt")
             print("Listing done!")
@@ -911,7 +928,9 @@ if __name__ == "__main__" and mode == "NAS":
         update_log = update_log_1
         
         for update in update_log:
-            print(total_updates)
+            if time.time() - last_print_time > 10:
+                print(total_updates)
+                last_print_time = time.time()
             change = update[nas_local_path.__len__():]
             if os.path.isdir(update): change += "/"
             
