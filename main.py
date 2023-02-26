@@ -65,8 +65,6 @@ if mode == import_errors:
     raise Exception("Error during packages importing")
 
 
-# FIXME: Better function naming
-    
     
 def prRed(skk): print("\033[91m{}\033[00m".format(skk))
 def prGreen(skk): print("\033[92m{}\033[00m".format(skk))
@@ -273,9 +271,6 @@ def get_trees_async():
     return left_tree, right_tree, common_tree
 
 
-# TODO: compare to_upload with right_tree and to_download with left_tree to prevent FILE_EXISTS exceptions
-# UPDATE: TEST
-# UODATE 2: Not working, status = FIXME:
 def get_changes(left_tree, right_tree, common_tree):
     to_upload = list_changes(left_tree, common_tree)
     to_download = list_changes(right_tree, common_tree)
@@ -459,6 +454,13 @@ def save_changes(to_upload, to_download):
         json.dump(to_download, changes_file)
 
 
+def save_changes_log(to_upload, to_download):
+    with open(documents_path + "last_upload.json", "w", encoding="utf-8") as changes_file:
+        json.dump(to_upload, changes_file)
+    with open(documents_path + "last_download.json", "w", encoding="utf-8") as changes_file:
+        json.dump(to_download, changes_file)
+        
+
 def exit_save_changes():
     global to_upload, to_download
     save_changes(to_upload, to_download)
@@ -474,7 +476,7 @@ def get_nas_tree():
         nas_contents[i] = nas_contents[i].removesuffix("\n")
     right_tree = nas_contents
 
-# test
+
 def get_local_tree():
     global file_tree_name
     with open(documents_path + file_tree_name, "r", encoding="utf-8") as file_tree:
@@ -874,6 +876,8 @@ if __name__ == "__main__" and mode == "PC":
         update_local_tree(get_contents_with_hashes(src_path), documents_path)
     else:
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
+    
+    save_changes_log()
             
             
 if __name__ == "__main__" and mode == "NAS":
