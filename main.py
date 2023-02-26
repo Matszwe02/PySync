@@ -743,7 +743,6 @@ for _ in range(hash_threads):
     t.start()
 
 # TODO: print in which directories files will be altered, in option 'l'
-# TODO: Better arguments - multiple
 if __name__ == "__main__" and mode == "PC":
     
     if not os.path.exists(documents_path): os.mkdir(documents_path)
@@ -751,6 +750,7 @@ if __name__ == "__main__" and mode == "PC":
     
     os.system('cls')
     init_sync()
+    action_list = sys.argv[1:]
         
     while True:
         
@@ -760,19 +760,23 @@ if __name__ == "__main__" and mode == "PC":
         to_download_removed_len = get_len(to_download, 'Deleted')
 
         
-        print(f"\nRun with {cyan('--sync')} argument to start sync immedialety.\n"
+        print(f"\nRun with {cyan('s')} argument to start sync immedialety.\n"
         f"There will be {blue(to_upload_len)} upload changes ({red(to_upload_removed_len)} files to remove)"
         f" and {blue(to_download_len)} download changes ({red(to_download_removed_len)} files to remove)."
         f"You can check them in upload.json and download.json in your Documents folder, or press {green('l')}.\n"
         f"Press \t {green('t')} for file_tree update \t {green('r')} to replace file tree with nas \t {green('q')} to quit"
         f" \t {green('c')} to clear sync queue \t {green('l')} to list changed files \t {green('x')} to reload sync"
-        f" \t {green('space')} to sync\n\n"
+        f" \t {green('space')} or {green('s')} to sync\t {green('/')} to skip confirming\n\n"
         f"{blue('r')} causes to update from local disk to NAS\n"
         f"{blue('t')} causes to update from NAS to local disk\n")
         
+        if action_list.__len__() == 0:
+            action_list = input()
         
-        if sys.argv.__len__() > 1 and sys.argv[1] == '--sync': action = ' '
-        else: action = str(msvcrt.getch())[2]
+        if action_list.__len__() > 0:
+            action = action_list[0]
+            action_list = action_list[1:]
+            
         prBlue(action)
         time.sleep(0.5)
         
@@ -830,13 +834,16 @@ if __name__ == "__main__" and mode == "PC":
             
             if action == 'q':
                 exit()
-                
-            input(f"\n\nPress {blue('Enter')} to continue")
+            
+            time.sleep(1)
+            if '/' not in action_list: 
+                input(f"\n\nPress {blue('Enter')} to continue")
         
-        if action == ' ':
+        if action == ' ' or action == 's':
             break
         
-        os.system('cls')
+        # os.system('cls')
+        print('\n' * 50)
         
             
     prGreen('Starting sync')
@@ -870,6 +877,7 @@ if __name__ == "__main__" and mode == "PC":
         no_errors = False
     
     
+    save_changes_log()
     prGreen(f'\nDone!')
     
     if no_errors:
@@ -877,7 +885,6 @@ if __name__ == "__main__" and mode == "PC":
     else:
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
     
-    save_changes_log()
             
             
 if __name__ == "__main__" and mode == "NAS":

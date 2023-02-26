@@ -1,1 +1,1 @@
-python main.py --sync
+python main.py s/
