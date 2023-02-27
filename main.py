@@ -38,6 +38,7 @@ src_path = config["SyncPath"].rstrip('/') + '/'
 file_tree_path = config["FileTreePath"].rstrip('/') + '/'
 nas_path = False
 nas_detection_timeout = config["NasDetectionTimeout"]
+nas_detection_trials = config["NasDetectionTrials"]
 nas_local_path = config["NasLocalPath"].rstrip('/') + '/'
 forbidden_paths = config["ForbiddenPaths"]
 allowed_paths = config["AllowedPaths"]
@@ -47,6 +48,7 @@ large_file_size = config["LargeFileSize"]
 small_file_threads = config["SmallFileThreads"]
 hash_threads = config["HashThreads"]
 nas_autosave_delay = config["NasAutoSaveDelay"]
+list_changes_fold_paths = config["ListChangesFoldPaths"]
 task_queue = queue.Queue()
 hash_queue = queue.Queue()
 
@@ -66,14 +68,14 @@ if mode == import_errors:
 
 
     
-def prRed(skk): print("\033[91m{}\033[00m".format(skk))
-def prGreen(skk): print("\033[92m{}\033[00m".format(skk))
-def prYellow(skk): print("\033[93m{}\033[00m".format(skk))
-def prBlue(skk): print("\033[94m{}\033[00m".format(skk))
-def prPurple(skk): print("\033[95m{}\033[00m".format(skk))
-def prCyan(skk): print("\033[96m{}\033[00m".format(skk))
-def prLightGray(skk): print("\033[97m{}\033[00m".format(skk))
-def prBlack(skk): print("\033[98m{}\033[00m".format(skk))
+def prRed(skk, end='\n'): print("\033[91m{}\033[00m".format(skk), end=end)
+def prGreen(skk, end='\n'): print("\033[92m{}\033[00m".format(skk), end=end)
+def prYellow(skk, end='\n'): print("\033[93m{}\033[00m".format(skk), end=end)
+def prBlue(skk, end='\n'): print("\033[94m{}\033[00m".format(skk), end=end)
+def prPurple(skk, end='\n'): print("\033[95m{}\033[00m".format(skk), end=end)
+def prCyan(skk, end='\n'): print("\033[96m{}\033[00m".format(skk), end=end)
+def prLightGray(skk, end='\n'): print("\033[97m{}\033[00m".format(skk), end=end)
+def prBlack(skk, end='\n'): print("\033[98m{}\033[00m".format(skk), end=end)
 
     
 def red(s): return("\033[91m{}\033[00m".format(s))
@@ -676,15 +678,17 @@ def file_operation(changes : dict, from_path: str, to_path: str):
         
 
 def init_sync():
-    global current_files_tree, to_upload, to_download, nas_path, left_tree, right_tree, common_tree
+    global to_upload, to_download, nas_path, left_tree, right_tree, common_tree
     
+    for i in range(nas_detection_trials):
     
-    nas_path = check_nas_paths()
-    
-    while nas_path == False:
-        prRed("Network Drive not found in any of selected paths!")
         nas_path = check_nas_paths()
-        # exit()
+        if nas_path != False:
+            break
+        prRed(f"Network Drive not found in any of selected paths! {i + 1} of {nas_detection_trials}")
+    else:
+        time.sleep(1)
+        exit()
     
     if not os.path.exists(documents_path + file_tree_name):
         open(documents_path + file_tree_name, 'a').close()
@@ -732,6 +736,39 @@ def analyse_tree_change(file_tree : list, possible_change):
 
 
 
+def list_info(change_list: dict):
+    try:
+        for item in change_list.keys():
+            if change_list[item].__len__() == 0:
+                continue
+            prYellow(" " + item + ":")
+            elements:str = change_list[item]
+            elements = sorted(elements)
+            start_dir = ''
+            no_items = 1
+            for element in elements:
+                
+                if start_dir == element[:element.replace('/', '_', list_changes_fold_paths).find('/')] and list_changes_fold_paths > 0:
+                    no_items += 1
+                    prCyan(wrap("  - " + start_dir + "   *" + str(no_items) + ' ' * 200)[:-2], end='\r')
+                    continue
+                
+                if start_dir == element[:element[:-1].rfind('/')] and list_changes_fold_paths < 1:
+                    no_items += 1
+                    prCyan(wrap("  - " + start_dir + "   *" + str(no_items) + ' ' * 200)[:-2], end='\r')
+                    continue
+                print()
+                no_items = 1
+                start_dir = element[:element.rfind('/')]
+                if "Deleted" in item:
+                    prRed("  - " + element, end='\r')
+                else:
+                    prGreen("  - " + element, end='\r')
+            print()
+    except AttributeError:
+        pass
+
+
 for _ in range(small_file_threads):
     t = threading.Thread(target=file_worker)
     t.daemon = True
@@ -742,7 +779,7 @@ for _ in range(hash_threads):
     t.daemon = True
     t.start()
 
-# TODO: print in which directories files will be altered, in option 'l'
+
 if __name__ == "__main__" and mode == "PC":
     
     if not os.path.exists(documents_path): os.mkdir(documents_path)
@@ -750,7 +787,9 @@ if __name__ == "__main__" and mode == "PC":
     
     os.system('cls')
     init_sync()
-    action_list = sys.argv[1:]
+    action_list = ''
+    for arg in sys.argv[1:]:
+        action_list += arg
         
     while True:
         
@@ -802,18 +841,7 @@ if __name__ == "__main__" and mode == "PC":
             
             if action == 'l':
                 prBlue("\nTo Upload:")
-                try:
-                    for item in to_upload.keys():
-                        if to_upload[item].__len__() == 0:
-                            continue
-                        prYellow(" " + item + ":")
-                        for element in to_upload[item]:
-                            if "Deleted" in item:
-                                prRed("  - " + element)
-                            else:
-                                prGreen("  - " + element)
-                except AttributeError:
-                    pass
+                list_info(to_upload)
                 
                 prBlue("\nTo Download:")
                 try:
