@@ -882,6 +882,9 @@ if __name__ == "__main__" and mode == "PC":
     no_errors = True
     
     
+    
+    save_changes_log(to_upload, to_download)
+    
     prBlue("\n   __________  Uploading files  __________")
     errors = 0
     file_operation(to_upload, src_path, nas_path)
@@ -905,13 +908,13 @@ if __name__ == "__main__" and mode == "PC":
         no_errors = False
     
     
-    save_changes_log()
-    prGreen(f'\nDone!')
     
     if no_errors:
         update_local_tree(get_contents_with_hashes(src_path), documents_path)
     else:
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
+    
+    prGreen(f'\nDone!')
     
             
             

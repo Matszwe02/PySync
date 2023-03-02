@@ -4,7 +4,7 @@
     "NasPaths" : ["N:/", "P:/", "O:/", "\\\\192.168.1.200\\nas/", "\\\\192.168.0.234\\nas/", "\\\\10.180.99.4\\nas/"],
     "NasDetectionTimeout" : 2,
     "NasDetectionTrials" : 4,
-    "NasLocalPath" : "/srv/dev-disk-by-uuid-01D8F28252779AB0/",
+    "NasLocalPath" : "/srv/dev-disk-by-uuid-c54f6509-7ff0-4bb5-ba40-57e3bb010a63/nas/",
     "ForbiddenPaths" : ["$RECYCLE.BIN", ".PySync", "System Volume Information", ".recycle"],
     "AllowedPaths" : ["*"],
     "DetectCopy" : false,
