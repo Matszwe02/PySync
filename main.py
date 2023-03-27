@@ -58,6 +58,8 @@ tqdm_main_format = '{desc:<10.50} | {percentage:3.0f}% | {bar} | {n_fmt}/{total_
 
 errors = 0
 last_print_time = 0
+current_formatted_tree = {}
+
 
 mode = 'PC'
 if os.path.split(os.getcwd())[-1] + '/' == file_tree_path:
@@ -194,7 +196,7 @@ def run_nas_script():
     time.sleep(2)
     while os.path.exists(nas_path + file_tree_path + "sync.txt"):
         time.sleep(1)
-    get_nas_tree() 
+    get_nas_tree()
     prGreen("NAS fileTree download complete")
 
 
@@ -258,12 +260,13 @@ def get_contents_with_hashes(path, unformatted = True):
 
 def get_trees_async():
     time_start = time.time()
-    global left_tree, right_tree, common_tree
+    global left_tree, right_tree, common_tree, current_formatted_tree
     right_tree = []
     thread = threading.Thread(target=run_nas_script)
     thread.start()
     print("Listing local files...")
     left_tree = get_contents_with_hashes(src_path)
+    current_formatted_tree = left_tree
     
     prGreen("Local listing complete")
     # exit()
@@ -470,6 +473,7 @@ def exit_save_changes():
         prYellow("Saved session changes")
 
 
+#FIXME: CRITICAL BUG ZERO LENGTH TREE WHEN ERROR DURING TREE DOWNLOAD
 def get_nas_tree():
     global right_tree
     with open(nas_path + file_tree_path + file_tree_name, "r", encoding="utf-8") as file_tree:
@@ -910,7 +914,7 @@ if __name__ == "__main__" and mode == "PC":
     
     
     if no_errors:
-        update_local_tree(get_contents_with_hashes(src_path), documents_path)
+        update_local_tree(current_formatted_tree, documents_path)
     else:
         prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
     
