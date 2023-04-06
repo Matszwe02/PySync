@@ -752,25 +752,47 @@ def list_info(change_list: dict):
             no_items = 1
             for element in elements:
                 
-                if start_dir == element[:element.replace('/', '_', list_changes_fold_paths).find('/')] and list_changes_fold_paths > 0:
+                if element[-1] == '/':
+                    test_dir = element
+                else:
+                    test_dir = element[:-17]
+                    
+                start_index = -1
+                for _ in range(list_changes_fold_paths):
+                    start_index = test_dir.find("/", start_index + 1)
+                    if start_index == -1:
+                        start_index = -2
+                        break
+                    
+                fix_start_dir = ">" + start_dir
+                fix_test_dir = ">" + test_dir[:start_index+1]
+                if start_index == -2:
+                    fix_test_dir = ">" + test_dir
+                
+                
+                if fix_test_dir in fix_start_dir and list_changes_fold_paths > 0:
                     no_items += 1
-                    prCyan(wrap("  - " + start_dir + "   *" + str(no_items) + ' ' * 200)[:-2], end='\r')
+                    # if fix_test_dir[-1] != '/':
+                    #     fix_test_dir += '/'
+                    
+                    if "Deleted" in item:
+                        print(wrap(red("  - " + fix_test_dir[1:]) + cyan("   *" + str(no_items)) + ' ' * 200)[:-2], end='\r')
+                    else:
+                        print(wrap(green("  - " + fix_test_dir[1:]) + cyan("   *" + str(no_items)) + ' ' * 200)[:-2], end='\r')
+                        
                     continue
                 
-                if start_dir == element[:element[:-1].rfind('/')] and list_changes_fold_paths < 1:
-                    no_items += 1
-                    prCyan(wrap("  - " + start_dir + "   *" + str(no_items) + ' ' * 200)[:-2], end='\r')
-                    continue
+                
                 print()
                 no_items = 1
-                start_dir = element[:element.rfind('/')]
+                start_dir = element
                 if "Deleted" in item:
                     prRed("  - " + element, end='\r')
                 else:
                     prGreen("  - " + element, end='\r')
             print()
     except AttributeError:
-        pass
+        prRed("ATTRIBUTE ERROR !!!")
 
 
 for _ in range(small_file_threads):
