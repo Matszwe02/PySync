@@ -192,12 +192,26 @@ def run_nas_script():
     update_nas_config()
     with open(nas_path + file_tree_path + "sync.txt", "w") as f:
         f.write(" ")
-    
+        
     time.sleep(2)
     while os.path.exists(nas_path + file_tree_path + "sync.txt"):
         time.sleep(1)
+    prGreen("NAS listing complete")
     get_nas_tree()
     prGreen("NAS fileTree download complete")
+
+
+def reload_nas_tree():
+    print("Reloading NAS tree...")
+    update_nas_config()
+    with open(nas_path + file_tree_path + "restart.txt", "w") as f:
+        f.write(" ")
+        
+    time.sleep(2)
+    while os.path.exists(nas_path + file_tree_path + "restart.txt"):
+        time.sleep(1)
+        
+    prGreen("NAS fileTree reloaded")
 
 
 def get_contents(path, local_path = ""):
@@ -440,7 +454,7 @@ def get_len(dictionary: dict, condition = ''):
     except:
         return 0
 
-# test
+
 def load_changes():
     try:
         with open(documents_path + "upload.json", "r", encoding="utf-8") as changes_file:
@@ -491,8 +505,7 @@ def get_local_tree():
             contents[i] = contents[i].removesuffix("\n")
     return contents
 
-# test
-# TODO: update tree with every sync file to prevent issues with modified files during sync
+
 def update_local_tree(local_tree : list, path):
     global file_tree_name
     with open(path + file_tree_name, "w", encoding="utf-8") as file_tree:
@@ -831,7 +844,7 @@ if __name__ == "__main__" and mode == "PC":
         f"You can check them in upload.json and download.json in your Documents folder, or press {green('l')}.\n"
         f"Press \t {green('t')} for file_tree update \t {green('r')} to replace file tree with nas \t {green('q')} to quit"
         f" \t {green('c')} to clear sync queue \t {green('l')} to list changed files \t {green('x')} to reload sync"
-        f" \t {green('space')} or {green('s')} to sync\t {green('/')} to skip confirming\n\n"
+        f"\t {green('n')} to reload NAS tree \t {green('space')} or {green('s')} to sync\t {green('/')} to skip confirming\n\n"
         f"{blue('r')} causes to update from local disk to NAS\n"
         f"{blue('t')} causes to update from NAS to local disk\n")
         
@@ -845,7 +858,7 @@ if __name__ == "__main__" and mode == "PC":
         prBlue(action)
         time.sleep(0.5)
         
-        if action in 'crtqlx':
+        if action in 'crtqlxn':
             if action == 't':
                 if left_tree == None:
                     left_tree = get_contents_with_hashes(src_path)
@@ -870,19 +883,11 @@ if __name__ == "__main__" and mode == "PC":
                 list_info(to_upload)
                 
                 prBlue("\nTo Download:")
-                try:
-                    for item in to_download.keys():
-                        if to_download[item].__len__() == 0:
-                            continue
-                        prYellow(" " + item + ":")
-                        for element in to_download[item]:
-                            if "Deleted" in item:
-                                prRed("  - " + element)
-                            else:
-                                prGreen("  - " + element)
-                except AttributeError:
-                    pass
-                
+                list_info(to_download)
+            
+            if action == 'n':
+                reload_nas_tree()
+            
             if action == 'x':
                 init_sync()
             
