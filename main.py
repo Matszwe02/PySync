@@ -52,11 +52,13 @@ list_changes_fold_paths = config["ListChangesFoldPaths"]
 task_queue = queue.Queue()
 hash_queue = queue.Queue()
 
+NASsuccessfullyDownloaded = False
 documents_path = os.path.expanduser("~/Documents/PySync/").replace("\\", "/")
 
 tqdm_main_format = '{desc:<10.50} | {percentage:3.0f}% | {bar} | {n_fmt}/{total_fmt} {rate_fmt}{postfix} | ETA:{remaining}'
 
 errors = 0
+retries = 0
 last_print_time = 0
 current_formatted_tree = {}
 
@@ -160,10 +162,14 @@ def file_worker():
 
 def hash_action(path):
     global hashed_files
-    
-    file_stat = os.stat(path[1])
-    file_time = file_stat.st_mtime
-    file_size = file_stat.st_size
+    try:
+        file_stat = os.stat(path[1])
+        file_time = file_stat.st_mtime
+        file_size = file_stat.st_size
+    except:
+        if path[1].__len__() > 256:
+            prRed(path[1])
+            raise Exception("PATH over 256 chars!")
     
     size = str(hex(str(file_size).__len__()))[-1]
     prehash_str = bytearray((str(file_size) + "&" + str(file_time)).encode("utf-8"))
@@ -188,6 +194,7 @@ def update_nas_config():
 
 
 def run_nas_script():
+    global NASsuccessfullyDownloaded
     print("Listing NAS files...")
     update_nas_config()
     with open(nas_path + file_tree_path + "sync.txt", "w") as f:
@@ -199,6 +206,7 @@ def run_nas_script():
     prGreen("NAS listing complete")
     get_nas_tree()
     prGreen("NAS fileTree download complete")
+    NASsuccessfullyDownloaded = True
 
 
 def reload_nas_tree():
@@ -273,6 +281,7 @@ def get_contents_with_hashes(path, unformatted = True):
     
 
 def get_trees_async():
+    global NASsuccessfullyDownloaded
     time_start = time.time()
     global left_tree, right_tree, common_tree, current_formatted_tree
     right_tree = []
@@ -286,6 +295,9 @@ def get_trees_async():
     # exit()
     common_tree = get_local_tree()
     thread.join()
+    if NASsuccessfullyDownloaded == False:
+        raise Exception("Failed to download NAS tree")
+    NASsuccessfullyDownloaded = False
     print(f'Total time: {time.time() - time_start}')
     return left_tree, right_tree, common_tree
 
@@ -539,7 +551,6 @@ def file_operation(changes : dict, from_path: str, to_path: str):
     
     global large_file_size
     changes_1 = copy.deepcopy(changes)
-    
     with tqdm(total=changes_1["DirCreated"].__len__() + 10, desc = " ", bar_format='{desc}', position=1) as desc:
         for item in tqdm(sorted(changes_1["DirCreated"]), "DirCreated", bar_format=tqdm_main_format, unit='file', position=0, colour="BLUE"):
             desc.set_description_str(wrap("    " + (item)))
@@ -819,16 +830,21 @@ for _ in range(hash_threads):
     t.start()
 
 
-if __name__ == "__main__" and mode == "PC":
+def main(action_list = ''):
+    
+    global errors
+    global no_errors
+    global retries
     
     if not os.path.exists(documents_path): os.mkdir(documents_path)
     if not os.path.exists(documents_path + file_tree_name): open(documents_path + file_tree_name, "w").close()
     
     os.system('cls')
     init_sync()
-    action_list = ''
-    for arg in sys.argv[1:]:
-        action_list += arg
+    # action_list = ''
+    if action_list == '':
+        for arg in sys.argv[1:]:
+            action_list += arg
         
     while True:
         
@@ -919,6 +935,7 @@ if __name__ == "__main__" and mode == "PC":
     prBlue("\n   __________  Uploading files  __________")
     errors = 0
     file_operation(to_upload, src_path, nas_path)
+    print(errors)
     if errors > 0:
         prYellow("Some errors occured. Retrying operations...")
         file_operation(to_upload, src_path, nas_path)
@@ -930,6 +947,7 @@ if __name__ == "__main__" and mode == "PC":
     prBlue("\n   _________  Downloading files  _________")
     errors = 0
     file_operation(to_download, nas_path, src_path)
+    print(errors)
     if errors > 0:
         prYellow("Some errors occured. Retrying operations...")
         errors = 0
@@ -943,11 +961,27 @@ if __name__ == "__main__" and mode == "PC":
     if no_errors:
         update_local_tree(current_formatted_tree, documents_path)
     else:
-        prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
+        if retries < 1:
+            retries += 1
+            prRed("Clearing local tree and retrying operations...")
+            time.sleep(5)
+            main('cxs/')
+        elif retries < 2:
+            retries += 1
+            prRed("Clearing NAS tree and retrying operations...")
+            time.sleep(5)
+            main('cnxs/')
+            
+        else:
+            prYellow("Syncing incomplete. Cannot run next sync before completing this one.")
     
     prGreen(f'\nDone!')
     
-            
+
+
+
+if __name__ == "__main__" and mode == "PC":
+    main()      
             
 if __name__ == "__main__" and mode == "NAS":
     

@@ -14,7 +14,7 @@
     "SmallFileThreads" : 32,
     "HashThreads" : 4,
     "NasAutoSaveDelay" : 60,
-    "ListChangesFoldPaths" : 5,
+    "ListChangesFoldPaths" : 6,
     
     "FileTreeName" : "file_tree.txt",
     "FileTreePath" : ".PySync/",
