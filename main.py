@@ -49,6 +49,8 @@ small_file_threads = config["SmallFileThreads"]
 hash_threads = config["HashThreads"]
 nas_autosave_delay = config["NasAutoSaveDelay"]
 list_changes_fold_paths = config["ListChangesFoldPaths"]
+max_operations_without_confirm = config["MaxOperationsWithoutConfirm"]
+
 task_queue = queue.Queue()
 hash_queue = queue.Queue()
 
@@ -870,20 +872,23 @@ def main(action_list = ''):
         if action_list.__len__() > 0:
             action = action_list[0]
             action_list = action_list[1:]
+        else:
+            action = 'Nothing selected'
+        if action == ' ': action = 's'
             
         prBlue(action)
         time.sleep(0.5)
         
         if action in 'crtqlxn':
             if action == 't':
-                if left_tree == None:
+                if 'left_tree' in globals() or left_tree == None:
                     left_tree = get_contents_with_hashes(src_path)
                 update_local_tree(left_tree, documents_path)
                 prPurple("SYNC OVERRIDE \t file_tree update")
                 print(f"use {blue('x')} option to reload sync")
                 
             if action == 'r':
-                if right_tree == None:
+                if 'right_tree' in globals() or right_tree == None:
                     run_nas_script()
                 update_local_tree(right_tree, documents_path)
                 prPurple("SYNC OVERRIDE \t replace file tree with nas")
@@ -915,7 +920,13 @@ def main(action_list = ''):
                 input(f"\n\nPress {blue('Enter')} to continue")
         
         if action == ' ' or action == 's':
-            break
+            if to_upload_len + to_download_len > max_operations_without_confirm:
+                prYellow(f"\n\nWARNING! There will be {to_upload_len + to_download_len} operations, which is greater than max operations without confirm")
+                if input("Confirm? [Y/N]").strip().upper() == 'Y':
+                    break
+            else:
+                break
+        
         
         # os.system('cls')
         print('\n' * 50)

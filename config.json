@@ -15,6 +15,7 @@
     "HashThreads" : 4,
     "NasAutoSaveDelay" : 60,
     "ListChangesFoldPaths" : 6,
+    "MaxOperationsWithoutConfirm" : 1000,
     
     "FileTreeName" : "file_tree.txt",
     "FileTreePath" : ".PySync/",
